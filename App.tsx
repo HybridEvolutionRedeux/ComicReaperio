@@ -11,7 +11,7 @@ import {
   Terminal, ExternalLink, RefreshCw, AlertTriangle, ShieldAlert,
   Eraser, Target, Mountain, User as UserIcon, Sparkles, History,
   MousePointer2, Menu as MenuIcon, Upload, ImageDown, XCircle,
-  FileImage, Frame, Wand, Send
+  FileImage, Frame, Wand, Send, Zap
 } from 'lucide-react';
 import { ComicProject, Panel, Layer, LayerType, AISettings, AISource, AIBackend } from './types';
 import { FloatingWindow } from './components/FloatingWindow';
@@ -26,6 +26,8 @@ const PAGE_PRESETS = {
   COVER: { width: 1400, height: 2000, name: 'Book Cover', description: 'High-aspect ratio layout' },
   SQUARE: { width: 1080, height: 1080, name: 'Social Post', description: '1:1 grid layout' }
 };
+
+const STORAGE_KEY = 'comiccraft_current_project';
 
 const INITIAL_PROJECT: ComicProject = {
   id: '1',
@@ -108,8 +110,13 @@ const Knob: React.FC<{ value: number, onChange: (val: number) => void, label: st
 };
 
 const App: React.FC = () => {
-  const [project, setProject] = useState<ComicProject>(INITIAL_PROJECT);
-  const [selectedPanelId, setSelectedPanelId] = useState<string | null>('p1');
+  // Load from localStorage on init
+  const [project, setProject] = useState<ComicProject>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : INITIAL_PROJECT;
+  });
+  
+  const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [showAIWindow, setShowAIWindow] = useState(false);
   const [showTextWindow, setShowTextWindow] = useState(false);
@@ -119,12 +126,18 @@ const App: React.FC = () => {
   const [showProperties, setShowProperties] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [isExporting, setIsExporting] = useState(false);
+  const [aiActionLabel, setAiActionLabel] = useState<string>('Processing...');
   
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, type: 'global' | 'panel' | 'layer-sidebar', panelId?: string, layerId?: string } | null>(null);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Auto-save to localStorage
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
+  }, [project]);
 
   const [aiSettings, setAiSettings] = useState<AISettings>({
     source: 'online',
@@ -190,10 +203,15 @@ const App: React.FC = () => {
   const updateLayer = (panelId: string, layerId: string, updates: Partial<Layer>) => {
     setProject(prev => ({
       ...prev,
-      panels: prev.panels.map(p => p.id === panelId ? {
-        ...p,
-        layers: p.layers.map(l => l.id === layerId ? { ...l, ...updates } : l)
-      } : p)
+      panels: prev.panels.map(p => {
+        if (p.id === panelId) {
+          return {
+            ...p,
+            layers: p.layers.map(l => l.id === layerId ? { ...l, ...updates } : l)
+          };
+        }
+        return p;
+      })
     }));
   };
 
@@ -358,24 +376,102 @@ const App: React.FC = () => {
     setContextMenu(null);
   };
 
-  const savePromptToHistory = (p: string) => {
-    if (!p.trim()) return;
-    const newHistory = [p, ...promptHistory.filter(h => h !== p)].slice(0, 20);
-    setPromptHistory(newHistory);
-    localStorage.setItem('comiccraft_prompts', JSON.stringify(newHistory));
+  // Fix: Add missing removeSelectedLayer function to handle layer deletion from context menu
+  const removeSelectedLayer = () => {
+    if (!selectedPanelId || !selectedLayerId) return;
+    setProject(prev => ({
+      ...prev,
+      panels: prev.panels.map(p => {
+        if (p.id === selectedPanelId) {
+          return { ...p, layers: p.layers.filter(l => l.id !== selectedLayerId) };
+        }
+        return p;
+      })
+    }));
+    setSelectedLayerId(null);
+    setContextMenu(null);
+  };
+
+  // Fix: Add missing acceptGeneration function to insert generated AI assets into the target panel
+  const acceptGeneration = () => {
+    if (!aiPreview || !targetPanelId) return;
+    
+    const panel = project.panels.find(p => p.id === targetPanelId);
+    if (!panel) return;
+
+    const newLayer: Layer = {
+      id: `l${Date.now()}`,
+      type: aiSettings.targetType === 'background' ? LayerType.BACKGROUND : LayerType.CHARACTER,
+      name: `${aiSettings.targetType === 'background' ? 'Background' : 'Character'} ${Date.now().toString().slice(-4)}`,
+      content: aiPreview,
+      originalContent: originalPreview || undefined,
+      hasBackgroundRemoved: aiSettings.removeBackground && aiSettings.targetType === 'character',
+      x: 50,
+      y: 50,
+      scale: aiSettings.targetType === 'background' ? 1 : 0.5,
+      rotation: 0,
+      opacity: 1,
+      zIndex: panel.layers.length + 1
+    };
+
+    updatePanel(targetPanelId, { layers: [...panel.layers, newLayer] });
+    setAiPreview(null);
+    setOriginalPreview(null);
+    setShowAIWindow(false);
+    setSelectedPanelId(targetPanelId);
+    setSelectedLayerId(newLayer.id);
+    
+    // Maintain prompt history
+    if (prompt && !promptHistory.includes(prompt)) {
+      const newHistory = [prompt, ...promptHistory.slice(0, 19)];
+      setPromptHistory(newHistory);
+      localStorage.setItem('comiccraft_prompts', JSON.stringify(newHistory));
+    }
+  };
+
+  // Fix: Add missing addTextBubble function to create new speech, thought, or shout bubbles
+  const addTextBubble = (type: 'speech' | 'thought' | 'shout') => {
+    const targetId = selectedPanelId || (project.panels.length > 0 ? project.panels[0].id : null);
+    if (!targetId) return;
+    
+    const panel = project.panels.find(p => p.id === targetId);
+    if (!panel) return;
+
+    const newLayer: Layer = {
+      id: `l${Date.now()}`,
+      type: LayerType.TEXT_BUBBLE,
+      name: `Bubble ${Date.now().toString().slice(-4)}`,
+      content: 'New Dialogue',
+      bubbleType: type,
+      x: 50,
+      y: 50,
+      scale: 0.3,
+      rotation: 0,
+      opacity: 1,
+      zIndex: panel.layers.length + 1,
+      fontSize: 24,
+      tailX: 20,
+      tailY: 85
+    };
+
+    updatePanel(targetId, { layers: [...panel.layers, newLayer] });
+    setSelectedPanelId(targetId);
+    setSelectedLayerId(newLayer.id);
+    setShowTextWindow(false);
   };
 
   const handleGenerateImage = async () => {
     if (!prompt) return;
     setIsGenerating(true);
+    setAiActionLabel('Visualizing Prompt...');
     setLastError(null);
     setOriginalPreview(null);
-    savePromptToHistory(prompt);
     try {
       const enhanced = await enhancePrompt(prompt);
       const img = await generateImage(enhanced);
       setOriginalPreview(img);
       if (aiSettings.targetType === 'character' && aiSettings.removeBackground) {
+        setAiActionLabel('Magic Extracting Subject...');
         const processed = await removeBackgroundImage(img);
         setAiPreview(processed);
       } else {
@@ -388,81 +484,13 @@ const App: React.FC = () => {
     }
   };
 
-  const togglePreviewBG = async () => {
-    if (!aiPreview || !originalPreview) return;
-    setIsGenerating(true);
-    try {
-      if (aiPreview === originalPreview) {
-        const processed = await removeBackgroundImage(originalPreview);
-        setAiPreview(processed);
-      } else {
-        setAiPreview(originalPreview);
-      }
-    } catch (err) {
-      setLastError("Processing failed.");
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  const acceptGeneration = () => {
-    if (!aiPreview || !targetPanelId) return;
-    const panel = project.panels.find(p => p.id === targetPanelId);
-    if (!panel) return;
-    const isBG = aiSettings.targetType === 'background';
-    const newLayer: Layer = {
-      id: `l${Date.now()}`,
-      type: isBG ? LayerType.BACKGROUND : LayerType.CHARACTER,
-      name: `${aiSettings.targetType.toUpperCase()}: ${prompt.slice(0, 10)}`,
-      content: aiPreview,
-      originalContent: originalPreview || undefined,
-      hasBackgroundRemoved: !isBG && aiPreview !== originalPreview,
-      x: 50,
-      y: 50,
-      scale: isBG ? 2.5 : 1,
-      rotation: 0,
-      opacity: 1,
-      zIndex: isBG ? 0 : panel.layers.length + 1
-    };
-    updatePanel(targetPanelId, { layers: [...panel.layers, newLayer] });
-    setAiPreview(null);
-    setOriginalPreview(null);
-  };
-
-  const addTextBubble = (type: 'speech' | 'thought' | 'shout') => {
-    if (!selectedPanelId) return;
-    const panel = project.panels.find(p => p.id === selectedPanelId);
-    if (!panel) return;
-    
-    const newLayer: Layer = {
-      id: `l${Date.now()}`,
-      type: LayerType.TEXT_BUBBLE,
-      name: `Bubble: ${type}`,
-      content: 'New Dialogue',
-      bubbleType: type,
-      x: 50,
-      y: 50,
-      scale: 1,
-      rotation: 0,
-      opacity: 1,
-      zIndex: panel.layers.length + 1,
-      fontSize: 16,
-      color: '#000000',
-      tailX: 20,
-      tailY: 85
-    };
-    
-    updatePanel(selectedPanelId, { layers: [...panel.layers, newLayer] });
-    setSelectedLayerId(newLayer.id);
-    setShowTextWindow(false);
-  };
-
   const handlePropertyBGAction = async (panelId: string, layerId: string, action: 'remove' | 'restore' | 'extract') => {
     const panel = project.panels.find(p => p.id === panelId);
     const layer = panel?.layers.find(l => l.id === layerId);
     if (!layer) return;
     
     setIsGenerating(true);
+    setAiActionLabel(action === 'extract' ? 'Isolating Subject...' : 'Clearing Background...');
     setContextMenu(null);
     try {
       if (action === 'remove') {
@@ -483,21 +511,13 @@ const App: React.FC = () => {
     }
   };
 
-  const downloadProject = () => {
-    const blob = new Blob([JSON.stringify(project)], {type: 'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${project.title || 'comic'}.json`;
-    a.click();
-    setContextMenu(null);
-  };
-
   const savePageAsPNG = async () => {
     if (!workspaceRef.current) return;
     setIsExporting(true);
     setContextMenu(null);
     
+    const originalSelectedPanel = selectedPanelId;
+    const originalSelectedLayer = selectedLayerId;
     setSelectedPanelId(null);
     setSelectedLayerId(null);
     
@@ -508,23 +528,24 @@ const App: React.FC = () => {
         scale: 2, 
         width: project.width,
         height: project.height,
+        logging: false,
         onclone: (clonedDoc) => {
           const el = clonedDoc.querySelector('.export-target') as HTMLElement;
-          if (el) {
-            el.style.transform = 'none';
-          }
+          if (el) el.style.transform = 'none';
         }
       });
       
       const link = document.createElement('a');
-      link.download = `${project.title || 'comic_page'}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.download = `${project.title.replace(/\s+/g, '_')}_${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png', 1.0);
       link.click();
     } catch (err) {
       console.error("Export error:", err);
-      alert("Export failed. Please try again.");
+      alert("PNG Export failed. High DPI capture might be too large for this browser's memory.");
     } finally {
       setIsExporting(false);
+      setSelectedPanelId(originalSelectedPanel);
+      setSelectedLayerId(originalSelectedLayer);
     }
   };
 
@@ -537,18 +558,28 @@ const App: React.FC = () => {
     try {
       const canvas = await html2canvas(el, {
         useCORS: true,
-        scale: 2,
+        scale: 3, // Even higher DPI for individual panels
         backgroundColor: '#ffffff'
       });
       const link = document.createElement('a');
-      link.download = `panel_${panelId.slice(-4)}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.download = `Panel_${panelId.slice(-4)}.png`;
+      link.href = canvas.toDataURL('image/png', 1.0);
       link.click();
     } catch (err) {
       console.error("Panel export error:", err);
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const downloadProject = () => {
+    const blob = new Blob([JSON.stringify(project, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${project.title.replace(/\s+/g, '_')}.json`;
+    a.click();
+    setContextMenu(null);
   };
 
   const loadProject = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -560,29 +591,10 @@ const App: React.FC = () => {
         const json = JSON.parse(event.target?.result as string);
         setProject(json);
       } catch (err) {
-        alert("Invalid project file.");
+        alert("Corrupted or invalid JSON project file.");
       }
     };
     reader.readAsText(file);
-    setContextMenu(null);
-  };
-
-  const saveSelectedImage = () => {
-    const layer = getSelectedLayer();
-    if (!layer || !layer.content.startsWith('data:')) return;
-    const a = document.createElement('a');
-    a.href = layer.content;
-    a.download = `comic_asset_${layer.id}.png`;
-    a.click();
-    setContextMenu(null);
-  };
-
-  const removeSelectedLayer = () => {
-    if (!selectedPanelId || !selectedLayerId) return;
-    const panel = project.panels.find(p => p.id === selectedPanelId);
-    if (!panel) return;
-    updatePanel(selectedPanelId, { layers: panel.layers.filter(l => l.id !== selectedLayerId) });
-    setSelectedLayerId(null);
     setContextMenu(null);
   };
 
@@ -594,22 +606,22 @@ const App: React.FC = () => {
       <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={loadProject} />
       
       {/* Sidebar Navigation */}
-      <div className={`${isMobile ? 'w-12' : 'w-16'} bg-[#1a1a1a] border-r border-[#333] flex flex-col items-center py-4 gap-6 z-[100]`} onContextMenu={e => e.stopPropagation()}>
-        <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-xl comic-font shadow-lg">C</div>
+      <div className={`${isMobile ? 'w-12' : 'w-16'} bg-[#1a1a1a] border-r border-[#333] flex flex-col items-center py-4 gap-6 z-[100] shadow-2xl`} onContextMenu={e => e.stopPropagation()}>
+        <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-xl comic-font shadow-lg transform hover:scale-105 active:scale-95 transition-all">C</div>
         <div className="flex flex-col gap-2">
           <ToolbarButton icon={<Plus size={isMobile ? 20 : 24} />} label="Add Panel" onClick={addPanel} />
-          <ToolbarButton icon={<Grid3X3 size={isMobile ? 20 : 24} />} label="Presets" onClick={() => setShowPresetsWindow(true)} />
+          <ToolbarButton icon={<Grid3X3 size={isMobile ? 20 : 24} />} label="Layout Presets" onClick={() => setShowPresetsWindow(true)} />
           <ToolbarButton icon={<Type size={isMobile ? 20 : 24} />} label="Dialogue" onClick={() => setShowTextWindow(true)} />
-          <ToolbarButton icon={<Wand2 size={isMobile ? 20 : 24} />} label="AI Studio" onClick={() => setShowAIWindow(true)} active={showAIWindow} />
+          <ToolbarButton icon={<Wand2 size={isMobile ? 20 : 24} />} label="AI Canvas" onClick={() => setShowAIWindow(true)} active={showAIWindow} />
         </div>
         <div className="mt-auto flex flex-col gap-4 mb-4 text-gray-500">
-          <ToolbarButton icon={<FileImage size={20} />} label="Export PNG" onClick={savePageAsPNG} />
+          <ToolbarButton icon={<FileImage size={20} />} label="Quick PNG" onClick={savePageAsPNG} />
           <ToolbarButton icon={<Download size={20} />} label="Export JSON" onClick={downloadProject} />
-          <ToolbarButton icon={<Settings size={20} />} label="Settings" onClick={() => setShowSettingsWindow(true)} />
+          <ToolbarButton icon={<Settings size={20} />} label="Project Settings" onClick={() => setShowSettingsWindow(true)} />
         </div>
       </div>
 
-      {/* Main Workspace Canvas */}
+      {/* Main Workspace */}
       <div 
         className="flex-1 relative overflow-auto bg-[#0f0f0f] flex items-center justify-center custom-scrollbar" 
         onPointerDown={() => { setSelectedPanelId(null); setSelectedLayerId(null); setContextMenu(null); }}
@@ -622,7 +634,7 @@ const App: React.FC = () => {
             width: project.width, 
             height: project.height, 
             transform: `scale(${project.zoom})`,
-            transition: 'transform 0.15s ease-out',
+            transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
             transformOrigin: 'center center'
           }}
           onClick={(e) => e.stopPropagation()}
@@ -635,7 +647,7 @@ const App: React.FC = () => {
               onPointerMove={handlePointerMove}
               onPointerUp={(e) => { (e.target as Element).releasePointerCapture(e.pointerId); setDragInfo(null); }}
               onContextMenu={(e) => handlePanelContextMenu(e, panel.id)}
-              className={`absolute cursor-move touch-none overflow-hidden ${selectedPanelId === panel.id ? 'ring-4 ring-indigo-500' : ''}`}
+              className={`absolute cursor-move touch-none overflow-hidden transition-shadow ${selectedPanelId === panel.id ? 'ring-4 ring-indigo-500 ring-offset-2 ring-offset-white' : ''}`}
               style={{ 
                 left: panel.x, 
                 top: panel.y, 
@@ -652,7 +664,7 @@ const App: React.FC = () => {
                 <div
                   key={layer.id}
                   onPointerDown={(e) => handlePointerDown(e, panel.id, layer.id)}
-                  className={`absolute pointer-events-auto cursor-pointer ${selectedLayerId === layer.id ? 'ring-2 ring-yellow-400' : ''}`}
+                  className={`absolute pointer-events-auto cursor-pointer ${selectedLayerId === layer.id ? 'ring-2 ring-yellow-400 drop-shadow-[0_0_8px_rgba(250,204,21,0.5)]' : ''}`}
                   style={{ 
                     left: `${layer.x}%`, 
                     top: `${layer.y}%`, 
@@ -674,32 +686,53 @@ const App: React.FC = () => {
           ))}
         </div>
 
-        {/* Zoom Controls Overlay */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a1a] border border-[#333] rounded-full p-1 flex items-center gap-2 shadow-2xl z-50 scale-75 md:scale-100" onContextMenu={e => e.stopPropagation()}>
-          <button onClick={() => setProject(p => ({...p, zoom: Math.max(0.1, p.zoom - 0.1)}))} className="p-2 hover:bg-[#333] rounded-full text-gray-400 hover:text-white">
+        {/* Status & Tooltips */}
+        <div className="absolute top-6 left-6 bg-black/40 backdrop-blur-md border border-white/10 px-3 py-1.5 rounded-full flex items-center gap-3 animate-in slide-in-from-top-4 duration-500">
+           <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+           <span className="text-[10px] font-black tracking-widest uppercase text-white/70">{project.title}</span>
+           <div className="w-px h-3 bg-white/20"></div>
+           <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-tighter">PRO BUILD V1.0</span>
+        </div>
+
+        {/* Zoom & Navigation Control */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a1a] border border-[#333] rounded-full p-1.5 flex items-center gap-2 shadow-2xl z-50 scale-75 md:scale-100" onContextMenu={e => e.stopPropagation()}>
+          <button onClick={() => setProject(p => ({...p, zoom: Math.max(0.1, p.zoom - 0.1)}))} className="p-2 hover:bg-[#333] rounded-full text-gray-400 hover:text-white transition-colors">
             <ZoomOut size={18} />
           </button>
-          <span className="text-[10px] font-black text-gray-400 w-12 text-center uppercase tracking-tighter">{Math.round(project.zoom * 100)}%</span>
-          <button onClick={() => setProject(p => ({...p, zoom: Math.min(2, p.zoom + 0.1)}))} className="p-2 hover:bg-[#333] rounded-full text-gray-400 hover:text-white">
+          <div className="w-px h-4 bg-white/10 mx-1"></div>
+          <span className="text-[10px] font-mono font-black text-white w-12 text-center">{Math.round(project.zoom * 100)}%</span>
+          <div className="w-px h-4 bg-white/10 mx-1"></div>
+          <button onClick={() => setProject(p => ({...p, zoom: Math.min(2, p.zoom + 0.1)}))} className="p-2 hover:bg-[#333] rounded-full text-gray-400 hover:text-white transition-colors">
             <ZoomIn size={18} />
           </button>
         </div>
 
-        {/* Overlays for Exporting and AI Generation */}
+        {/* Production Overlays */}
         {isExporting && (
-          <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[5000] backdrop-blur-sm animate-in fade-in">
-             <div className="flex flex-col items-center gap-4">
-                <RefreshCw className="animate-spin text-indigo-500" size={48} />
-                <span className="text-xl font-black comic-font tracking-widest animate-pulse">CAPTURING MASTERPIECE...</span>
+          <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-[5000] backdrop-blur-xl animate-in fade-in duration-300">
+             <div className="flex flex-col items-center gap-6">
+                <div className="relative">
+                   <RefreshCw className="animate-spin text-indigo-500" size={64} />
+                   <div className="absolute inset-0 flex items-center justify-center"><Zap size={24} className="text-white animate-pulse"/></div>
+                </div>
+                <div className="text-center space-y-2">
+                   <span className="text-2xl font-black comic-font tracking-[0.2em] text-white animate-pulse">EXPORTING HIGH-DPI ART...</span>
+                   <p className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest opacity-60">Serializing Canvas Layers & Base64 Data</p>
+                </div>
              </div>
           </div>
         )}
 
         {isGenerating && (
-          <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-[4500] backdrop-blur-[2px]">
-             <div className="flex flex-col items-center gap-2">
-                <Wand2 className="animate-pulse text-yellow-400" size={32} />
-                <span className="text-xs font-bold tracking-tighter text-white uppercase italic">Processing Layer...</span>
+          <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-[4500] backdrop-blur-[4px] animate-in fade-in">
+             <div className="bg-[#1a1a1a] border border-[#333] p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-4 scale-90 md:scale-100">
+                <div className="w-16 h-16 bg-indigo-600/20 rounded-full flex items-center justify-center border border-indigo-500/30">
+                  <Wand2 className="animate-bounce text-indigo-400" size={32} />
+                </div>
+                <div className="text-center">
+                  <span className="text-sm font-black tracking-widest text-white uppercase italic block">{aiActionLabel}</span>
+                  <span className="text-[9px] font-bold text-gray-500 uppercase mt-1">Consulting Gemini Flash-2.5</span>
+                </div>
              </div>
           </div>
         )}
@@ -707,43 +740,56 @@ const App: React.FC = () => {
 
       {/* Right Sidebar - Layers and Properties */}
       {(showLayers || showProperties) && (
-        <div className="w-80 bg-[#1a1a1a] border-l border-[#333] flex flex-col h-full z-50 overflow-y-auto custom-scrollbar hidden lg:flex" onContextMenu={e => e.stopPropagation()}>
-          <CollapsiblePanel title="Scene Manager" icon={<Layers size={14} />} isOpen={showLayers} onToggle={() => setShowLayers(!showLayers)}>
-            <div className="p-2 space-y-2">
+        <div className="w-80 bg-[#1a1a1a] border-l border-[#333] flex flex-col h-full z-50 overflow-y-auto custom-scrollbar hidden lg:flex shadow-2xl" onContextMenu={e => e.stopPropagation()}>
+          <CollapsiblePanel title="Scene Explorer" icon={<Layers size={14} />} isOpen={showLayers} onToggle={() => setShowLayers(!showLayers)}>
+            <div className="p-3 space-y-3">
+              {project.panels.length === 0 && <div className="text-center py-10 text-[9px] font-bold uppercase text-gray-600">No Panels Found</div>}
               {project.panels.map(panel => (
-                <div key={panel.id} className={`p-2 rounded border border-[#333] ${selectedPanelId === panel.id ? 'bg-indigo-900/20 border-indigo-500/50' : ''}`}>
-                  <div className="text-[10px] font-bold uppercase mb-1 flex justify-between">Panel {panel.id.slice(-4)}</div>
-                  {panel.layers.map(l => (
-                    <div 
-                      key={l.id} 
-                      className={`text-[9px] p-1 rounded transition-colors select-none ${selectedLayerId === l.id ? 'bg-yellow-500/20 text-yellow-500' : 'text-gray-400 cursor-pointer hover:bg-white/5'}`} 
-                      onClick={(e) => { e.stopPropagation(); setSelectedPanelId(panel.id); setSelectedLayerId(l.id); }}
-                      onContextMenu={(e) => handleLayerSidebarContextMenu(e, panel.id, l.id)}
-                    >
-                      {l.name}
-                    </div>
-                  ))}
+                <div key={panel.id} className={`p-2 rounded-xl border transition-all ${selectedPanelId === panel.id ? 'bg-indigo-900/10 border-indigo-500/40 shadow-[0_0_15px_rgba(99,102,241,0.1)]' : 'bg-black/20 border-[#333]'}`}>
+                  <div className="text-[10px] font-black uppercase mb-2 flex justify-between items-center px-1">
+                    <span className={selectedPanelId === panel.id ? 'text-indigo-400' : 'text-gray-500'}>Panel {panel.id.slice(-4)}</span>
+                    <button onClick={(e) => { e.stopPropagation(); setSelectedPanelId(panel.id); setContextMenu({x: e.clientX, y: e.clientY, type: 'panel', panelId: panel.id}) }} className="hover:text-white transition-colors"><MenuIcon size={12}/></button>
+                  </div>
+                  <div className="space-y-1">
+                    {panel.layers.length === 0 && <div className="text-[8px] italic text-gray-600 text-center py-2">No Layers</div>}
+                    {[...panel.layers].reverse().map(l => (
+                      <div 
+                        key={l.id} 
+                        className={`group flex items-center justify-between text-[9px] p-2 rounded-lg transition-all select-none border border-transparent ${selectedLayerId === l.id ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20' : 'text-gray-400 cursor-pointer hover:bg-white/5'}`} 
+                        onClick={(e) => { e.stopPropagation(); setSelectedPanelId(panel.id); setSelectedLayerId(l.id); }}
+                        onContextMenu={(e) => handleLayerSidebarContextMenu(e, panel.id, l.id)}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                           <div className={`w-1 h-1 rounded-full ${selectedLayerId === l.id ? 'bg-yellow-500' : 'bg-gray-600'}`}></div>
+                           <span className="truncate">{l.name}</span>
+                        </div>
+                        <div className="opacity-0 group-hover:opacity-100 flex gap-1">
+                           <button onClick={(e) => { e.stopPropagation(); duplicateLayer(panel.id, l.id); }} className="p-1 hover:text-white"><Copy size={10}/></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
           </CollapsiblePanel>
 
-          <CollapsiblePanel title="Properties" icon={<Settings size={14} />} isOpen={showProperties} onToggle={() => setShowProperties(!showProperties)}>
+          <CollapsiblePanel title="Contextual Controls" icon={<Settings size={14} />} isOpen={showProperties} onToggle={() => setShowProperties(!showProperties)}>
             <div className="p-4 space-y-6">
               {currentLayer ? (
                 <div className="space-y-4">
                   <LayerProperties layer={currentLayer} onUpdate={(u) => updateLayer(selectedPanelId!, selectedLayerId!, u)} allLayers={currentPanel?.layers || []} />
                   {(currentLayer.type === LayerType.CHARACTER || currentLayer.type === LayerType.ASSET || currentLayer.type === LayerType.BACKGROUND) && (
                     <div className="pt-4 border-t border-[#333] space-y-3">
-                      <label className="text-[10px] font-bold uppercase text-indigo-400">Processing</label>
+                      <label className="text-[10px] font-bold uppercase text-indigo-400 tracking-widest">AI POST-PROCESSING</label>
                       <div className="grid grid-cols-2 gap-2">
                         {!currentLayer.hasBackgroundRemoved ? (
                           <>
-                            <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'remove')} className="bg-indigo-600/10 border border-indigo-500/30 p-2 rounded text-[9px] font-bold uppercase flex items-center justify-center gap-2 hover:bg-indigo-600/20 transition-all"><Eraser size={12}/> Clear BG</button>
-                            <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'extract')} className="bg-yellow-600/10 border border-yellow-500/30 p-2 rounded text-[9px] font-bold uppercase flex items-center justify-center gap-2 hover:bg-yellow-600/20 transition-all"><Wand size={12}/> Magic Cut</button>
+                            <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'remove')} className="bg-indigo-600/10 border border-indigo-500/30 p-2.5 rounded-lg text-[9px] font-black uppercase flex items-center justify-center gap-2 hover:bg-indigo-600/20 transition-all text-indigo-400"><Eraser size={12}/> CLEAR BG</button>
+                            <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'extract')} className="bg-yellow-600/10 border border-yellow-500/30 p-2.5 rounded-lg text-[9px] font-black uppercase flex items-center justify-center gap-2 hover:bg-yellow-600/20 transition-all text-yellow-500"><Wand size={12}/> MAGIC CUT</button>
                           </>
                         ) : (
-                          <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'restore')} className="col-span-2 bg-[#222] border border-[#333] p-2 rounded text-[10px] font-bold uppercase flex items-center justify-center gap-2 hover:bg-[#333] transition-all"><RefreshCw size={12}/> Restore Original</button>
+                          <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'restore')} className="col-span-2 bg-[#222] border border-[#333] p-2.5 rounded-lg text-[10px] font-black uppercase flex items-center justify-center gap-2 hover:bg-[#333] transition-all"><RefreshCw size={12}/> REVERT TO SOURCE</button>
                         )}
                       </div>
                     </div>
@@ -751,7 +797,7 @@ const App: React.FC = () => {
                 </div>
               ) : currentPanel ? (
                 <PanelProperties panel={currentPanel} onUpdate={(u) => updatePanel(selectedPanelId!, u)} />
-              ) : <div className="text-center text-[10px] text-gray-500 py-10 uppercase font-bold">Select a target</div>}
+              ) : <div className="text-center text-[10px] text-gray-500 py-16 uppercase font-black opacity-30 italic">Select an object to edit</div>}
             </div>
           </CollapsiblePanel>
         </div>
@@ -760,119 +806,107 @@ const App: React.FC = () => {
       {/* Dynamic Context Menus */}
       {contextMenu && (
         <div 
-          className="fixed bg-[#1a1a1a] border border-[#333] shadow-2xl rounded-lg z-[2000] overflow-hidden w-64 flex flex-col animate-in fade-in zoom-in duration-100"
+          className="fixed bg-[#1a1a1a] border border-[#333] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] rounded-2xl z-[2000] overflow-hidden w-64 flex flex-col animate-in fade-in zoom-in duration-150 p-1.5"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={e => e.stopPropagation()}
         >
           {contextMenu.type === 'panel' ? (
             <>
-              <div className="p-2 bg-[#111] text-[9px] font-black uppercase tracking-widest text-indigo-500 border-b border-[#333]">Panel: {contextMenu.panelId?.slice(-4)}</div>
-              <button onClick={() => { setTargetPanelId(contextMenu.panelId!); setAiSettings(s => ({...s, targetType: 'character'})); setShowAIWindow(true); setContextMenu(null); }} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold border-b border-[#333]"><UserIcon size={14}/> Generate Character</button>
-              <button onClick={() => { setTargetPanelId(contextMenu.panelId!); setAiSettings(s => ({...s, targetType: 'background'})); setShowAIWindow(true); setContextMenu(null); }} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold border-b border-[#333]"><Mountain size={14}/> Generate Background</button>
-              
-              <button onClick={() => savePanelAsPNG(contextMenu.panelId!)} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold border-b border-[#333]"><Frame size={14}/> Save Panel as PNG</button>
-              
-              {selectedLayerId && (
-                <>
-                  <div className="p-2 bg-[#111] text-[8px] font-black uppercase tracking-widest text-yellow-500 border-y border-[#333]">Layer Actions</div>
-                  <button onClick={saveSelectedImage} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold"><ImageDown size={14}/> Save Current Asset</button>
-                  <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'remove')} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold"><Eraser size={14}/> AI Background Removal</button>
-                  <button onClick={() => handlePropertyBGAction(selectedPanelId!, selectedLayerId!, 'extract')} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold"><Wand size={14}/> Magic Subject Extract</button>
-                  <button onClick={removeSelectedLayer} className="flex items-center gap-3 p-3 text-xs hover:bg-red-600/20 text-red-400 hover:text-white text-left font-bold"><Trash2 size={14}/> Remove Asset</button>
-                </>
-              )}
-              <div className="border-t border-[#333]"></div>
-              <button onClick={() => { setProject(p => ({...p, panels: p.panels.filter(pan => pan.id !== contextMenu.panelId)})); setContextMenu(null); }} className="flex items-center gap-3 p-3 text-xs hover:bg-red-600 transition-colors text-left font-bold text-red-400 hover:text-white"><XCircle size={14}/> Delete Entire Panel</button>
+              <div className="p-3 mb-1 text-[9px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-500/5 rounded-xl border border-indigo-500/10">PANEL ID: {contextMenu.panelId?.slice(-4)}</div>
+              <button onClick={() => { setTargetPanelId(contextMenu.panelId!); setAiSettings(s => ({...s, targetType: 'character'})); setShowAIWindow(true); setContextMenu(null); }} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/10 rounded-xl text-left font-bold transition-all"><UserIcon size={14}/> Generate Character</button>
+              <button onClick={() => { setTargetPanelId(contextMenu.panelId!); setAiSettings(s => ({...s, targetType: 'background'})); setShowAIWindow(true); setContextMenu(null); }} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/10 rounded-xl text-left font-bold transition-all"><Mountain size={14}/> Generate Background</button>
+              <div className="h-px bg-[#333] my-1 mx-2"></div>
+              <button onClick={() => savePanelAsPNG(contextMenu.panelId!)} className="flex items-center gap-3 p-3 text-xs hover:bg-white/5 rounded-xl text-left font-bold transition-all"><Frame size={14}/> Save Panel as PNG</button>
+              <div className="h-px bg-[#333] my-1 mx-2"></div>
+              <button onClick={() => { setProject(p => ({...p, panels: p.panels.filter(pan => pan.id !== contextMenu.panelId)})); setContextMenu(null); }} className="flex items-center gap-3 p-3 text-xs hover:bg-red-600/20 rounded-xl transition-all text-left font-bold text-red-400"><XCircle size={14}/> Delete Panel</button>
             </>
           ) : contextMenu.type === 'layer-sidebar' ? (
             <>
-              <div className="p-2 bg-[#111] text-[9px] font-black uppercase tracking-widest text-yellow-500 border-b border-[#333]">Sidebar Action</div>
-              <button onClick={() => duplicateLayer(contextMenu.panelId!, contextMenu.layerId!)} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold border-b border-[#333]"><Copy size={14}/> Duplicate Layer</button>
+              <div className="p-3 mb-1 text-[9px] font-black uppercase tracking-widest text-yellow-500 bg-yellow-500/5 rounded-xl border border-yellow-500/10">LAYER OPERATIONS</div>
+              <button onClick={() => duplicateLayer(contextMenu.panelId!, contextMenu.layerId!)} className="flex items-center gap-3 p-3 text-xs hover:bg-yellow-600/10 rounded-xl text-left font-bold transition-all"><Copy size={14}/> Duplicate Asset</button>
               
-              <div className="p-2 bg-[#111] text-[8px] font-black uppercase tracking-widest text-gray-500 border-b border-[#333]">Send to Panel</div>
-              <div className="max-h-48 overflow-y-auto custom-scrollbar">
+              <div className="p-2.5 mt-2 text-[8px] font-black uppercase tracking-widest text-gray-500 opacity-50">RELOCATE TO PANEL</div>
+              <div className="max-h-48 overflow-y-auto custom-scrollbar px-1">
                 {project.panels.map(p => (
                   <button 
                     key={p.id} 
                     disabled={p.id === contextMenu.panelId}
                     onClick={() => sendLayerToPanel(contextMenu.panelId!, contextMenu.layerId!, p.id)}
-                    className={`w-full flex items-center gap-3 p-2.5 text-xs hover:bg-indigo-600/20 text-left font-bold border-b border-[#333]/50 ${p.id === contextMenu.panelId ? 'opacity-30 cursor-not-allowed' : ''}`}
+                    className={`w-full flex items-center gap-3 p-2.5 text-[10px] hover:bg-indigo-600/20 rounded-lg text-left font-bold transition-all mb-0.5 ${p.id === contextMenu.panelId ? 'opacity-20 cursor-not-allowed' : ''}`}
                   >
                     <Send size={12}/> Panel {p.id.slice(-4)}
                   </button>
                 ))}
               </div>
-              <button onClick={removeSelectedLayer} className="flex items-center gap-3 p-3 text-xs hover:bg-red-600/20 text-red-400 hover:text-white text-left font-bold"><Trash2 size={14}/> Remove Layer</button>
+              <div className="h-px bg-[#333] my-1 mx-2"></div>
+              <button onClick={removeSelectedLayer} className="flex items-center gap-3 p-3 text-xs hover:bg-red-600/20 rounded-xl text-red-400 text-left font-bold transition-all"><Trash2 size={14}/> Remove Layer</button>
             </>
           ) : (
             <>
-              <div className="p-2 bg-[#111] text-[9px] font-black uppercase tracking-widest text-gray-500 border-b border-[#333]">Project Actions</div>
-              <button onClick={addPanel} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold border-b border-[#333]"><Plus size={14}/> New Panel</button>
-              <button onClick={() => setShowPresetsWindow(true)} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold border-b border-[#333]"><Layout size={14}/> Load Preset</button>
-              
-              <div className="p-2 bg-[#111] text-[8px] font-black uppercase tracking-widest text-gray-500 border-y border-[#333]">Save & Load</div>
-              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold"><Upload size={14}/> Import Project (JSON)</button>
-              <button onClick={downloadProject} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold"><Save size={14}/> Export Project (JSON)</button>
-              <button onClick={savePageAsPNG} className="flex items-center gap-3 p-3 text-xs hover:bg-green-600/20 text-green-400 hover:text-white text-left font-bold border-t border-[#333]"><FileImage size={14}/> Save Page as PNG</button>
-              
-              <div className="border-t border-[#333]"></div>
-              <button onClick={() => setShowSettingsWindow(true)} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/20 text-left font-bold"><Settings size={14}/> Project Settings</button>
+              <div className="p-3 mb-1 text-[9px] font-black uppercase tracking-widest text-gray-500 bg-white/5 rounded-xl border border-white/10">PROJECT MENU</div>
+              <button onClick={addPanel} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/10 rounded-xl text-left font-bold transition-all"><Plus size={14}/> New Panel</button>
+              <button onClick={() => setShowPresetsWindow(true)} className="flex items-center gap-3 p-3 text-xs hover:bg-indigo-600/10 rounded-xl text-left font-bold transition-all"><Layout size={14}/> Choose Layout</button>
+              <div className="h-px bg-[#333] my-1 mx-2"></div>
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-3 p-3 text-xs hover:bg-white/5 rounded-xl text-left font-bold transition-all"><Upload size={14}/> Import Project</button>
+              <button onClick={downloadProject} className="flex items-center gap-3 p-3 text-xs hover:bg-white/5 rounded-xl text-left font-bold transition-all"><Save size={14}/> Save JSON Backup</button>
+              <div className="h-px bg-[#333] my-1 mx-2"></div>
+              <button onClick={savePageAsPNG} className="flex items-center gap-3 p-3 text-xs hover:bg-green-600/20 rounded-xl text-green-400 text-left font-black transition-all"><FileImage size={14}/> GENERATE FINAL PNG</button>
             </>
           )}
         </div>
       )}
 
-      {/* Asset Generation, Presets, and Project Windows */}
+      {/* Floating Modal Windows */}
       {showAIWindow && (
-        <FloatingWindow title="AI Art Studio" onClose={() => setShowAIWindow(false)} width={isMobile ? 'w-[90vw]' : 'w-[500px]'}>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 bg-[#111] p-3 rounded border border-[#333]">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-gray-500">Panel</label>
-                <select className="w-full bg-black border border-[#333] p-2 rounded text-[10px] font-bold text-indigo-400 outline-none" value={targetPanelId || ''} onChange={(e) => setTargetPanelId(e.target.value)}>
-                  {project.panels.map(p => <option key={p.id} value={p.id}>Panel {p.id.slice(-4)}</option>)}
+        <FloatingWindow title="AI ART STUDIO" onClose={() => setShowAIWindow(false)} width={isMobile ? 'w-[90vw]' : 'w-[500px]'}>
+          <div className="space-y-4 animate-in fade-in duration-300">
+            <div className="grid grid-cols-2 gap-3 bg-black/40 p-3 rounded-2xl border border-white/5">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-gray-600 tracking-widest">TARGET PANEL</label>
+                <select className="w-full bg-black border border-white/10 p-2.5 rounded-xl text-[10px] font-black text-indigo-400 outline-none focus:border-indigo-500 transition-all appearance-none cursor-pointer" value={targetPanelId || ''} onChange={(e) => setTargetPanelId(e.target.value)}>
+                  {project.panels.map(p => <option key={p.id} value={p.id}>PANEL {p.id.slice(-4)}</option>)}
                 </select>
               </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-gray-500">Mode</label>
-                <div className="flex bg-black p-1 rounded border border-[#333]">
-                  <button onClick={() => setAiSettings({...aiSettings, targetType: 'background'})} className={`flex-1 p-1 rounded text-[9px] font-bold uppercase ${aiSettings.targetType === 'background' ? 'bg-indigo-600' : 'text-gray-500'}`}>BG</button>
-                  <button onClick={() => setAiSettings({...aiSettings, targetType: 'character'})} className={`flex-1 p-1 rounded text-[9px] font-bold uppercase ${aiSettings.targetType === 'character' ? 'bg-indigo-600' : 'text-gray-500'}`}>Hero</button>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-gray-600 tracking-widest">ASSET TYPE</label>
+                <div className="flex bg-black p-1 rounded-xl border border-white/10 h-10">
+                  <button onClick={() => setAiSettings({...aiSettings, targetType: 'background'})} className={`flex-1 rounded-lg text-[9px] font-black uppercase transition-all ${aiSettings.targetType === 'background' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-gray-500 hover:text-gray-300'}`}>BG</button>
+                  <button onClick={() => setAiSettings({...aiSettings, targetType: 'character'})} className={`flex-1 rounded-lg text-[9px] font-black uppercase transition-all ${aiSettings.targetType === 'character' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-gray-500 hover:text-gray-300'}`}>HERO</button>
                 </div>
               </div>
             </div>
 
             <div className="space-y-2">
               <textarea 
-                className="w-full bg-[#111] border border-[#333] rounded p-3 text-sm h-32 focus:border-indigo-500 outline-none font-bold" 
-                placeholder="Describe your asset..." 
+                className="w-full bg-black border border-white/10 rounded-2xl p-4 text-sm h-36 focus:border-indigo-500 outline-none font-bold placeholder:text-gray-700 transition-all shadow-inner" 
+                placeholder="Ex: Cyberpunk samurai standing in neon rain, dynamic manga perspective, cell shaded..." 
                 value={prompt} 
                 onChange={(e) => setPrompt(e.target.value)} 
               />
               {promptHistory.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                   {promptHistory.map((h, i) => (
-                     <button key={i} onClick={() => setPrompt(h)} className="text-[8px] bg-[#222] border border-[#333] px-2 py-1 rounded text-gray-500 hover:text-indigo-400 hover:border-indigo-500 truncate max-w-[120px]">{h}</button>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                   {promptHistory.slice(0, 5).map((h, i) => (
+                     <button key={i} onClick={() => setPrompt(h)} className="text-[8px] bg-black border border-white/5 px-3 py-1.5 rounded-full text-gray-500 hover:text-indigo-400 hover:border-indigo-500 transition-all truncate max-w-[150px] font-bold uppercase">{h}</button>
                    ))}
                 </div>
               )}
             </div>
             
-            <div className="flex gap-2">
-              <button onClick={async () => setPrompt(await enhancePrompt(prompt))} className="bg-[#222] p-2 rounded text-[10px] font-bold uppercase flex items-center gap-1"><Sparkles size={12}/> Enhance</button>
-              <button onClick={handleGenerateImage} disabled={isGenerating} className="flex-1 bg-indigo-600 p-2 rounded text-xs font-black uppercase flex items-center justify-center gap-2">
-                {isGenerating ? <RefreshCw className="animate-spin" size={14}/> : <ImageIcon size={14}/>} {isGenerating ? 'Drawing...' : 'Generate'}
+            <div className="flex gap-3">
+              <button onClick={async () => { setAiActionLabel('Analyzing Intent...'); setPrompt(await enhancePrompt(prompt)); }} className="bg-[#222] px-4 py-3 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 hover:bg-[#333] transition-all"><Sparkles size={14}/> ENHANCE</button>
+              <button onClick={handleGenerateImage} disabled={isGenerating || !prompt} className="flex-1 bg-indigo-600 px-4 py-3 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-2 hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                {isGenerating ? <RefreshCw className="animate-spin" size={16}/> : <ImageIcon size={16}/>} DRAW ASSET
               </button>
             </div>
 
             {aiPreview && (
-              <div className="pt-4 border-t border-[#333] space-y-3">
-                <div className="dark-transparency-grid rounded border border-[#333] overflow-hidden aspect-video relative flex items-center justify-center">
+              <div className="pt-4 mt-2 border-t border-white/10 space-y-4 animate-in slide-in-from-bottom-4 duration-500">
+                <div className="dark-transparency-grid rounded-2xl border border-white/10 overflow-hidden aspect-video relative flex items-center justify-center bg-black/40 shadow-2xl">
                   <img src={aiPreview} className="max-w-full max-h-full object-contain" alt="preview" />
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => { setAiPreview(null); setOriginalPreview(null); }} className="flex-1 bg-[#222] p-2 rounded text-[10px] font-bold uppercase">Discard</button>
-                  <button onClick={acceptGeneration} className="flex-[2] bg-indigo-600 p-2 rounded text-[10px] font-bold uppercase">Place in Panel</button>
+                <div className="flex gap-3">
+                  <button onClick={() => { setAiPreview(null); setOriginalPreview(null); }} className="flex-1 bg-[#222] py-3 rounded-xl text-[10px] font-black uppercase hover:bg-red-900/20 hover:text-red-400 transition-all">DISCARD</button>
+                  <button onClick={acceptGeneration} className="flex-[2] bg-indigo-600 py-3 rounded-xl text-[10px] font-black uppercase hover:bg-indigo-500 transition-all shadow-xl">PLACE IN PANEL {targetPanelId?.slice(-4)}</button>
                 </div>
               </div>
             )}
@@ -880,15 +914,16 @@ const App: React.FC = () => {
         </FloatingWindow>
       )}
 
+      {/* Global Presets */}
       {showPresetsWindow && (
-        <FloatingWindow title="Layout Presets" onClose={() => setShowPresetsWindow(false)} width="w-80">
-          <div className="space-y-2">
+        <FloatingWindow title="PAGE DIMENSIONS" onClose={() => setShowPresetsWindow(false)} width="w-80">
+          <div className="space-y-3 p-1">
             {Object.entries(PAGE_PRESETS).map(([key, value]) => (
-              <button key={key} onClick={() => applyLayoutPreset(key as keyof typeof PAGE_PRESETS)} className="w-full bg-[#1a1a1a] hover:bg-[#333] border border-[#333] p-3 rounded flex items-center gap-4 group transition-colors">
-                <div className="w-10 h-10 rounded bg-[#222] flex items-center justify-center group-hover:bg-indigo-600 transition-colors"><Layout size={20} className="text-gray-400 group-hover:text-white" /></div>
+              <button key={key} onClick={() => applyLayoutPreset(key as keyof typeof PAGE_PRESETS)} className="w-full bg-black/40 hover:bg-indigo-900/10 border border-white/5 p-4 rounded-2xl flex items-center gap-4 group transition-all">
+                <div className="w-12 h-12 rounded-xl bg-black flex items-center justify-center group-hover:bg-indigo-600 transition-all shadow-inner border border-white/5"><Layout size={24} className="text-gray-600 group-hover:text-white" /></div>
                 <div className="text-left">
-                  <div className="text-[11px] font-black uppercase tracking-widest">{value.name}</div>
-                  <div className="text-[9px] text-indigo-400 font-mono">{value.width} x {value.height}</div>
+                  <div className="text-[11px] font-black uppercase tracking-widest text-white/90">{value.name}</div>
+                  <div className="text-[9px] text-indigo-400 font-mono font-bold mt-1 opacity-60">{value.width} x {value.height} PIXELS</div>
                 </div>
               </button>
             ))}
@@ -896,27 +931,32 @@ const App: React.FC = () => {
         </FloatingWindow>
       )}
 
+      {/* Settings & Credits */}
       {showSettingsWindow && (
-        <FloatingWindow title="Settings" onClose={() => setShowSettingsWindow(false)} width="w-80">
-          <div className="space-y-4 p-2">
-            <div className="space-y-2">
-               <label className="text-[10px] text-gray-500 font-bold uppercase">Author</label>
-               <input type="text" value={project.author} onChange={e => setProject({...project, author: e.target.value})} className="w-full bg-black p-2 rounded border border-[#333] text-xs" />
+        <FloatingWindow title="STUDIO PREFERENCES" onClose={() => setShowSettingsWindow(false)} width="w-80">
+          <div className="space-y-6 p-2">
+            <div className="space-y-3">
+               <label className="text-[10px] text-gray-600 font-black uppercase tracking-widest px-1">PROJECT IDENTITY</label>
+               <div className="space-y-2">
+                  <input type="text" placeholder="Project Title" value={project.title} onChange={e => setProject({...project, title: e.target.value})} className="w-full bg-black px-4 py-3 rounded-xl border border-white/10 text-xs font-bold focus:border-indigo-500 transition-all" />
+                  <input type="text" placeholder="Author Name" value={project.author} onChange={e => setProject({...project, author: e.target.value})} className="w-full bg-black px-4 py-3 rounded-xl border border-white/10 text-xs font-bold focus:border-indigo-500 transition-all" />
+               </div>
             </div>
-            <div className="space-y-2">
-               <label className="text-[10px] text-gray-500 font-bold uppercase">Title</label>
-               <input type="text" value={project.title} onChange={e => setProject({...project, title: e.target.value})} className="w-full bg-black p-2 rounded border border-[#333] text-xs" />
+            <div className="bg-indigo-600/5 border border-indigo-500/10 p-4 rounded-2xl">
+               <span className="text-[10px] font-black text-indigo-400 uppercase tracking-tighter">Production Tip</span>
+               <p className="text-[9px] text-gray-500 mt-2 font-bold leading-relaxed">Generated high-DPI comics are saved directly to your browser's local storage. Export a JSON backup periodically to ensure your work is safe across devices.</p>
             </div>
           </div>
         </FloatingWindow>
       )}
 
+      {/* Bubble Menu */}
       {showTextWindow && (
-        <FloatingWindow title="Dialogue" onClose={() => setShowTextWindow(false)} width="w-72">
+        <FloatingWindow title="DIALOGUE LIBRARY" onClose={() => setShowTextWindow(false)} width="w-72">
           <div className="space-y-3">
-            <button onClick={() => addTextBubble('speech')} className="w-full bg-[#111] hover:bg-[#222] p-4 rounded border border-[#333] flex items-center gap-4 group"><div className="w-8 h-8 bg-white rounded flex items-center justify-center"><Square size={16} color="black"/></div><span className="text-xs font-black uppercase">Speech</span></button>
-            <button onClick={() => addTextBubble('thought')} className="w-full bg-[#111] hover:bg-[#222] p-4 rounded border border-[#333] flex items-center gap-4 group"><div className="w-8 h-8 bg-white/40 rounded flex items-center justify-center"><Square size={16} color="black"/></div><span className="text-xs font-black uppercase">Thought</span></button>
-            <button onClick={() => addTextBubble('shout')} className="w-full bg-[#111] hover:bg-[#222] p-4 rounded border border-[#333] flex items-center gap-4 group"><div className="w-8 h-8 bg-white rounded flex items-center justify-center -rotate-12"><Square size={16} color="black"/></div><span className="text-xs font-black uppercase italic">Shout</span></button>
+            <button onClick={() => addTextBubble('speech')} className="w-full bg-black/40 hover:bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center gap-4 group transition-all"><div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-lg"><Square size={20} color="black" fill="black"/></div><span className="text-xs font-black uppercase tracking-widest">Normal Speech</span></button>
+            <button onClick={() => addTextBubble('thought')} className="w-full bg-black/40 hover:bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center gap-4 group transition-all"><div className="w-10 h-10 bg-white/40 rounded-xl flex items-center justify-center shadow-lg"><Square size={20} color="black"/></div><span className="text-xs font-black uppercase tracking-widest">Thought Cloud</span></button>
+            <button onClick={() => addTextBubble('shout')} className="w-full bg-black/40 hover:bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center gap-4 group transition-all"><div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center -rotate-12 shadow-lg scale-110"><Square size={20} color="black" fill="black"/></div><span className="text-xs font-black uppercase tracking-widest italic">Action Shout</span></button>
           </div>
         </FloatingWindow>
       )}
@@ -924,48 +964,51 @@ const App: React.FC = () => {
   );
 };
 
+// Internal Atomic Components
 const ToolbarButton = ({ icon, label, onClick, active }: any) => (
-  <button onClick={onClick} className={`p-3 rounded-lg group relative transition-all ${active ? 'bg-indigo-600 text-white' : 'hover:bg-[#333] text-gray-400'}`}>
+  <button onClick={onClick} className={`p-3.5 rounded-xl group relative transition-all duration-300 ${active ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-600/30' : 'hover:bg-white/5 text-gray-500 hover:text-gray-200'}`}>
     {icon}
-    <span className="absolute left-full ml-3 bg-black p-2 rounded text-[10px] font-bold uppercase whitespace-nowrap hidden group-hover:block z-[200] border border-[#333]">{label}</span>
+    <span className="absolute left-full ml-3 bg-[#1a1a1a] p-2.5 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap hidden group-hover:block z-[200] border border-[#333] shadow-2xl animate-in fade-in slide-in-from-left-2">{label}</span>
   </button>
 );
 
 const CollapsiblePanel = ({ title, icon, children, isOpen, onToggle }: any) => (
-  <div className={`flex flex-col border-b border-[#333] ${!isOpen ? 'h-10 flex-none' : 'flex-1 min-h-0'}`}>
-    <div className="p-3 bg-[#222] flex justify-between items-center cursor-pointer transition-colors hover:bg-[#2a2a2a]" onClick={onToggle}>
-      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest">{icon} {title}</div>
-      {isOpen ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+  <div className={`flex flex-col border-b border-white/5 ${!isOpen ? 'h-12 flex-none' : 'flex-1 min-h-0'}`}>
+    <div className="p-4 bg-[#1a1a1a] flex justify-between items-center cursor-pointer transition-colors hover:bg-white/5" onClick={onToggle}>
+      <div className="flex items-center gap-3 text-[10px] font-black uppercase tracking-widest text-white/80">{icon} {title}</div>
+      <div className="text-gray-600">{isOpen ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}</div>
     </div>
-    {isOpen && children}
+    <div className={`overflow-y-auto custom-scrollbar transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
+       {isOpen && children}
+    </div>
   </div>
 );
 
 const PanelProperties = ({ panel, onUpdate }: any) => {
   return (
-    <div className="space-y-6 animate-in fade-in duration-200">
-      <div className="text-[10px] font-bold uppercase text-indigo-400 border-b border-[#333] pb-2 flex items-center gap-2"><Layout size={12}/> Panel Settings</div>
-      <div className="space-y-4">
-        <label className="text-[8px] text-gray-500 uppercase font-bold tracking-widest block">Dimensions</label>
-        <div className="space-y-4">
-          <div className="space-y-1">
-             <div className="flex justify-between text-[8px] font-mono"><span className="text-gray-600">WIDTH</span> <span>{panel.width}px</span></div>
-             <input type="range" min="100" max="1200" value={panel.width} onChange={e => onUpdate({width: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded appearance-none" />
+    <div className="space-y-8 animate-in fade-in duration-300 p-1">
+      <div className="text-[10px] font-black uppercase text-indigo-400 border-b border-indigo-500/20 pb-3 flex items-center gap-2 tracking-[0.2em]"><Layout size={12}/> FRAME GEOMETRY</div>
+      <div className="space-y-6">
+        <label className="text-[9px] text-gray-500 uppercase font-black tracking-widest block opacity-60">Canvas Bounding Box</label>
+        <div className="space-y-5">
+          <div className="space-y-2 px-1">
+             <div className="flex justify-between text-[8px] font-black font-mono tracking-tighter"><span className="text-gray-600">WIDTH</span> <span className="text-indigo-400">{panel.width}PX</span></div>
+             <input type="range" min="100" max="1200" value={panel.width} onChange={e => onUpdate({width: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded-full appearance-none cursor-ew-resize" />
           </div>
-          <div className="space-y-1">
-             <div className="flex justify-between text-[8px] font-mono"><span className="text-gray-600">HEIGHT</span> <span>{panel.height}px</span></div>
-             <input type="range" min="100" max="1800" value={panel.height} onChange={e => onUpdate({height: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded appearance-none" />
+          <div className="space-y-2 px-1">
+             <div className="flex justify-between text-[8px] font-black font-mono tracking-tighter"><span className="text-gray-600">HEIGHT</span> <span className="text-indigo-400">{panel.height}PX</span></div>
+             <input type="range" min="100" max="1800" value={panel.height} onChange={e => onUpdate({height: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded-full appearance-none cursor-ew-resize" />
           </div>
         </div>
       </div>
-      <div className="flex justify-center bg-black/20 rounded-lg p-2"><Knob label="Panel Angle" value={panel.rotation} onChange={(val) => onUpdate({ rotation: val })} /></div>
-      <div className="space-y-4">
-        <label className="text-[8px] text-gray-500 uppercase font-bold tracking-widest flex justify-between">Border Size <span>{panel.borderThickness}px</span></label>
-        <input type="range" min="0" max="40" value={panel.borderThickness} onChange={e => onUpdate({borderThickness: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded appearance-none" />
+      <div className="flex justify-center bg-black/40 rounded-3xl p-6 border border-white/5"><Knob label="Canvas Rotation" value={panel.rotation} onChange={(val) => onUpdate({ rotation: val })} /></div>
+      <div className="space-y-4 px-1">
+        <label className="text-[9px] text-gray-500 uppercase font-black tracking-widest flex justify-between">Outline Weight <span>{panel.borderThickness}PX</span></label>
+        <input type="range" min="0" max="40" value={panel.borderThickness} onChange={e => onUpdate({borderThickness: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded-full appearance-none" />
       </div>
-      <div className="space-y-4">
-        <label className="text-[8px] text-gray-500 uppercase font-bold tracking-widest flex justify-between">Shadow Power <span>{panel.shadowIntensity}px</span></label>
-        <input type="range" min="0" max="50" value={panel.shadowIntensity} onChange={e => onUpdate({shadowIntensity: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded appearance-none" />
+      <div className="space-y-4 px-1">
+        <label className="text-[9px] text-gray-500 uppercase font-black tracking-widest flex justify-between">Drop Shadow <span>{panel.shadowIntensity}PX</span></label>
+        <input type="range" min="0" max="50" value={panel.shadowIntensity} onChange={e => onUpdate({shadowIntensity: +e.target.value})} className="w-full h-1 accent-indigo-500 bg-[#333] rounded-full appearance-none" />
       </div>
     </div>
   );
@@ -975,34 +1018,34 @@ const LayerProperties = ({ layer, onUpdate, allLayers }: any) => {
   const maxZ = allLayers.length > 0 ? Math.max(...allLayers.map((l: any) => l.zIndex)) : 0;
   const minZ = allLayers.length > 0 ? Math.min(...allLayers.map((l: any) => l.zIndex)) : 0;
   return (
-    <div className="space-y-6 animate-in fade-in duration-200">
-      <div className="text-[10px] font-bold uppercase text-yellow-500 border-b border-[#333] pb-2 flex items-center gap-2"><Layers size={12}/> Layer Control</div>
+    <div className="space-y-8 animate-in fade-in duration-300 p-1">
+      <div className="text-[10px] font-black uppercase text-yellow-500 border-b border-yellow-500/20 pb-3 flex items-center gap-2 tracking-[0.2em]"><Layers size={12}/> ASSET ATTRIBUTES</div>
       {layer.type === LayerType.TEXT_BUBBLE && (
-        <div className="space-y-2">
-           <label className="text-[8px] text-gray-500 uppercase font-bold tracking-widest">DIALOGUE</label>
-           <textarea value={layer.content} onChange={e => onUpdate({content: e.target.value})} className="w-full bg-black border border-[#333] p-2 rounded text-xs h-20 outline-none focus:border-yellow-500 transition-colors" />
+        <div className="space-y-3">
+           <label className="text-[9px] text-gray-600 uppercase font-black tracking-widest px-1">SCRIPT TEXT</label>
+           <textarea value={layer.content} onChange={e => onUpdate({content: e.target.value})} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-[13px] font-black h-24 outline-none focus:border-yellow-500 transition-all shadow-inner leading-relaxed" />
         </div>
       )}
-      <div className="space-y-4">
-        <label className="text-[8px] text-gray-500 uppercase font-bold tracking-widest flex justify-between">Transformations</label>
-        <div className="space-y-4">
-          <div className="space-y-1">
-             <div className="flex justify-between text-[8px] font-mono"><span className="text-gray-600">SCALE</span> <span>{layer.scale.toFixed(2)}x</span></div>
-             <input type="range" min="0.1" max="5" step="0.1" value={layer.scale} onChange={e => onUpdate({scale: +e.target.value})} className="w-full h-1 accent-yellow-500 bg-[#333] rounded appearance-none" />
+      <div className="space-y-6 px-1">
+        <label className="text-[9px] text-gray-500 uppercase font-black tracking-widest block opacity-60">Visual Scaling</label>
+        <div className="space-y-5">
+          <div className="space-y-2">
+             <div className="flex justify-between text-[8px] font-black font-mono tracking-tighter"><span className="text-gray-600">SCALE</span> <span className="text-yellow-500">{layer.scale.toFixed(2)}X</span></div>
+             <input type="range" min="0.1" max="5" step="0.05" value={layer.scale} onChange={e => onUpdate({scale: +e.target.value})} className="w-full h-1 accent-yellow-500 bg-[#333] rounded-full appearance-none cursor-ew-resize" />
           </div>
-          <div className="space-y-1">
-             <div className="flex justify-between text-[8px] font-mono"><span className="text-gray-600">OPACITY</span> <span>{Math.round(layer.opacity * 100)}%</span></div>
-             <input type="range" min="0" max="1" step="0.01" value={layer.opacity} onChange={e => onUpdate({opacity: +e.target.value})} className="w-full h-1 accent-yellow-500 bg-[#333] rounded appearance-none" />
+          <div className="space-y-2">
+             <div className="flex justify-between text-[8px] font-black font-mono tracking-tighter"><span className="text-gray-600">ALPHA</span> <span className="text-yellow-500">{Math.round(layer.opacity * 100)}%</span></div>
+             <input type="range" min="0" max="1" step="0.01" value={layer.opacity} onChange={e => onUpdate({opacity: +e.target.value})} className="w-full h-1 accent-yellow-500 bg-[#333] rounded-full appearance-none cursor-ew-resize" />
           </div>
         </div>
       </div>
-      <div className="flex justify-center bg-black/20 rounded-lg p-2"><Knob label="Rotation" value={layer.rotation} onChange={(val) => onUpdate({ rotation: val })} /></div>
-      <div className="space-y-2">
-          <label className="text-[8px] text-gray-500 uppercase font-bold tracking-widest">Stacking Order</label>
-          <div className="flex gap-1">
-              <button onClick={() => onUpdate({zIndex: minZ - 1})} className="flex-1 bg-[#111] p-2 rounded border border-[#333] hover:border-yellow-500 flex justify-center text-gray-400 hover:text-white transition-all" title="Push to Back"><ChevronFirst size={14}/></button>
-              <button onClick={() => onUpdate({zIndex: maxZ + 1})} className="flex-1 bg-[#111] p-2 rounded border border-[#333] hover:border-yellow-500 flex justify-center text-gray-400 hover:text-white transition-all" title="Bring to Top"><ChevronLast size={14}/></button>
-              <button onClick={() => onUpdate({flipX: !layer.flipX})} className={`flex-[2] p-2 rounded text-[9px] font-black uppercase transition-all ${layer.flipX ? 'bg-yellow-600 text-white' : 'bg-[#111] border border-[#333] text-gray-400 hover:text-white'}`}>FLIP ASSET</button>
+      <div className="flex justify-center bg-black/40 rounded-3xl p-6 border border-white/5"><Knob label="Rotation" value={layer.rotation} onChange={(val) => onUpdate({ rotation: val })} /></div>
+      <div className="space-y-3">
+          <label className="text-[9px] text-gray-500 uppercase font-black tracking-widest px-1">Layer Ordering</label>
+          <div className="flex gap-2">
+              <button onClick={() => onUpdate({zIndex: minZ - 1})} className="flex-1 bg-black/40 p-3 rounded-xl border border-white/10 hover:border-yellow-500/50 flex justify-center text-gray-500 hover:text-white transition-all" title="Push to Back"><ChevronFirst size={16}/></button>
+              <button onClick={() => onUpdate({zIndex: maxZ + 1})} className="flex-1 bg-black/40 p-3 rounded-xl border border-white/10 hover:border-yellow-500/50 flex justify-center text-gray-500 hover:text-white transition-all" title="Bring to Top"><ChevronLast size={16}/></button>
+              <button onClick={() => onUpdate({flipX: !layer.flipX})} className={`flex-[2] py-3 rounded-xl text-[10px] font-black uppercase transition-all tracking-widest ${layer.flipX ? 'bg-yellow-600 text-white shadow-lg shadow-yellow-600/20' : 'bg-black/40 border border-white/10 text-gray-500 hover:text-white'}`}>FLIP ASSET</button>
           </div>
       </div>
     </div>
