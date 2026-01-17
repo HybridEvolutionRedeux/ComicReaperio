@@ -1,0 +1,5 @@
+{
+  "name": "ComicCraft AI Studio",
+  "description": "A comprehensive React-based comic book and card editor with integrated AI generation (Gemini, Stable Diffusion), layer management, and interactive panel building.",
+  "requestFramePermissions": []
+}
