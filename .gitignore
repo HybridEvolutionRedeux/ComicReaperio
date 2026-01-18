@@ -22,3 +22,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Keep the Python backend private
+main.py
+backend/
+.venv/
+__pycache__/
+
+# Keep the React development clutter off GitHub
+frontend/node_modules/
+frontend/dist/
