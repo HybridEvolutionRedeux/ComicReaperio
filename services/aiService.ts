@@ -1,8 +1,10 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { AISettings, SelectedLora } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+/**
+ * AI Service Dispatcher
+ * Manages connections between Google Gemini (Cloud) and Local Backends (SD/A1111)
+ */
 
 export const fetchA1111Models = async (endpoint: string) => {
   try {
@@ -10,7 +12,8 @@ export const fetchA1111Models = async (endpoint: string) => {
     if (!response.ok) return [];
     const data = await response.json();
     return data.map((m: any) => m.title);
-  } catch {
+  } catch (error) {
+    console.warn("Local SD Checkpoints unreachable:", error);
     return [];
   }
 };
@@ -21,53 +24,55 @@ export const fetchA1111Loras = async (endpoint: string) => {
     if (!response.ok) return [];
     const data = await response.json();
     return data.map((l: any) => l.name);
-  } catch {
+  } catch (error) {
+    console.warn("Local SD LoRAs unreachable:", error);
     return [];
   }
 };
 
 export const generateImage = async (prompt: string, settings: AISettings, aspectRatio: string = "1:1") => {
+  // Always initialize inside the call context for most up-to-date environment state
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+
   if (settings.backend === 'gemini') {
-    return generateGeminiImage(prompt, aspectRatio);
+    return generateGeminiImage(ai, prompt, aspectRatio);
   } else if (settings.backend === 'automatic1111') {
     return generateA1111Image(prompt, settings);
-  } else if (settings.backend === 'comfyui') {
-    throw new Error("ComfyUI requires custom workflow mapping. Please use A1111 for standard API calls.");
   }
-  throw new Error("Unsupported backend");
+  throw new Error(`Unsupported backend: ${settings.backend}`);
 };
 
-const generateGeminiImage = async (prompt: string, aspectRatio: any) => {
+const generateGeminiImage = async (ai: GoogleGenAI, prompt: string, aspectRatio: any) => {
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
-    contents: { parts: [{ text: `Professional Comic Book Art: ${prompt}` }] },
+    contents: { parts: [{ text: `Professional Comic Book Art Illustration: ${prompt}. High quality, clean lines, vibrant.` }] },
     config: {
-      systemInstruction: "You are a professional comic book illustrator.",
       imageConfig: { aspectRatio }
     }
   });
+
   const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-  if (!part) throw new Error("Gemini returned no image.");
+  if (!part) throw new Error("Gemini Image Generation Failed - No Data Returned.");
   return `data:image/png;base64,${part.inlineData.data}`;
 };
 
 const generateA1111Image = async (prompt: string, settings: AISettings) => {
   const url = settings.endpoint || "http://127.0.0.1:7860";
   
-  // Inject LoRAs into the prompt
-  let finalPrompt = `comic book style, high quality, ${prompt}`;
+  // Construct prompt with LoRA weights
+  let finalPrompt = `comic book style, illustration, high resolution, ${prompt}`;
   if (settings.loras && settings.loras.length > 0) {
-    const loraTags = settings.loras.map(l => `<lora:${l.name}:${l.weight}>`).join(" ");
+    const loraTags = settings.loras.map(l => `<lora:${l.name}:${l.weight}>`).join(", ");
     finalPrompt += `, ${loraTags}`;
   }
 
   const payload = {
     prompt: finalPrompt,
-    negative_prompt: "text, watermark, low quality, photorealistic, signature",
-    steps: settings.steps || 20,
+    negative_prompt: "text, watermark, low quality, photorealistic, signature, blur, deformed",
+    steps: settings.steps || 25,
     cfg_scale: settings.cfgScale || 7,
-    width: 512,
-    height: 512,
+    width: 768,
+    height: 768,
     sampler_name: settings.sampler || "Euler a",
     override_settings: {
       sd_model_checkpoint: settings.model
@@ -81,8 +86,7 @@ const generateA1111Image = async (prompt: string, settings: AISettings) => {
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`A1111 Error: ${errText || "Backend Unreachable"}`);
+    throw new Error("Local SD Backend (Automatic1111) is unreachable. Check --api and --cors-allow-origins.");
   }
   
   const data = await response.json();
@@ -90,25 +94,29 @@ const generateA1111Image = async (prompt: string, settings: AISettings) => {
 };
 
 export const removeBackground = async (imageBase64: string) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   const data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+  
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: {
       parts: [
         { inlineData: { data, mimeType: 'image/png' } },
-        { text: "Remove background. Return isolated subject as transparent PNG." }
+        { text: "INSTRUCTION: Cut out the main subject. The background MUST be 100% transparent. Output only the PNG with alpha channel." }
       ]
     }
   });
+
   const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-  if (!part) throw new Error("Transparency processing failed.");
+  if (!part) throw new Error("Background removal failed.");
   return `data:image/png;base64,${part.inlineData.data}`;
 };
 
 export const enhancePrompt = async (basePrompt: string) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Detailed comic artist prompt: "${basePrompt}".`,
+    contents: `Act as a professional comic book script writer. Transform the following basic idea into a highly descriptive visual prompt for an illustrator: "${basePrompt}". Include details about lighting, camera angle, and comic art style. Output only the prompt text.`,
   });
   return response.text?.trim() || basePrompt;
 };

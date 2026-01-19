@@ -1,0 +1,64 @@
+================================================================================
+COMIC CRAFT AI STUDIO - TECHNICAL SPECIFICATION & ARCHITECTURE
+================================================================================
+
+1. OVERVIEW & INTENT
+--------------------
+Comic Craft AI Studio is a professional-grade creative suite designed for the 
+rapid prototyping and final production of comic books and illustrated media. 
+Its primary intent is to bridge the gap between high-level conceptualization 
+(using Google Gemini's reasoning) and specialized visual production (using 
+local Stable Diffusion hardware).
+
+2. KEY ARCHITECTURAL PILLARS
+----------------------------
+A. HYBRID AI ENGINE:
+   - Cloud (Gemini): Handles complex prompt enhancement, logic-based background 
+     removal, and high-fidelity text-to-image generation.
+   - Local (Automatic1111/SD): Connects to the user's local GPU via PyCharm/API 
+     endpoints to allow for specialized Checkpoints and LoRA-driven styles.
+
+B. HIERARCHICAL CANVAS SYSTEM:
+   - Project -> Panels -> Layers.
+   - Panels act as isolated coordinate systems, allowing for complex 
+     compositions within a single page layout.
+   - Layers support characters, backgrounds, and speech bubbles with 
+     independent transformation matrices (Scale, Rotation, Flip).
+
+C. ASSET PIPELINE:
+   - Generation: Automated prompt engineering via Gemini 3 Flash.
+   - Post-Processing: Intelligent background removal to create alpha-mapped 
+     character sprites.
+   - Placement: Drag-and-drop coordinate mapping with real-time UI feedback.
+
+3. TECHNICAL SPECIFICATIONS
+---------------------------
+- Framework: React 19 (ESM based).
+- Styling: Tailwind CSS (Utility-first JIT).
+- State Management: React Hooks (useState/useCallback) with local persistence 
+  (localStorage) to prevent progress loss.
+- Image Processing: HTML5 Canvas + html2canvas for high-resolution PNG exports.
+- Icons: Lucide-React (Vector based).
+- Font Engine: Google Fonts integration (Bangers for comic headers).
+
+4. WORKFLOW BEHAVIOR
+--------------------
+1. LAYOUT: User selects a page preset (Comic/Manga/Cover).
+2. COMPOSITION: User adds panels and defines the story flow.
+3. PRODUCTION: 
+   - User targets a panel via Context Menu.
+   - "AI Production Studio" is used to describe an asset.
+   - If "SD Local" is active, the app fetches Checkpoints and LoRAs from 
+     the 127.0.0.1 endpoint.
+   - Gemini removes the background if "Character Hero" mode is selected.
+4. LETTERING: Dynamic SVG-based speech bubbles are added to provide narrative.
+5. EXPORT: The project is rendered to a flat 2x scale PNG or saved as a 
+   portable JSON project file.
+
+5. INTENDED ENVIRONMENT
+-----------------------
+This application is designed to be run in a developer-centric environment 
+(like PyCharm) where the developer has control over local API endpoints 
+(Automatic1111 --api) while utilizing the power of Gemini's multimodal 
+capabilities for asset refinement.
+================================================================================
