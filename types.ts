@@ -12,8 +12,8 @@ export interface Layer {
   id: string;
   type: LayerType;
   name: string;
-  content: string; // URL for images, string for text
-  originalContent?: string; // Stored image with background for restoration
+  content: string; 
+  originalContent?: string;
   hasBackgroundRemoved?: boolean;
   x: number;
   y: number;
@@ -27,8 +27,8 @@ export interface Layer {
   font?: string;
   fontSize?: number;
   color?: string;
-  tailX?: number; // Relative to bubble center
-  tailY?: number; // Relative to bubble center
+  tailX?: number;
+  tailY?: number;
 }
 
 export interface Panel {
@@ -57,17 +57,21 @@ export interface ComicProject {
   zoom: number;
 }
 
-export type AISource = 'online' | 'offline' | 'local';
 export type AIBackend = 'gemini' | 'comfyui' | 'automatic1111';
 
+export interface SelectedLora {
+  name: string;
+  weight: number;
+}
+
 export interface AISettings {
-  source: AISource;
   backend: AIBackend;
-  endpoint: string; // e.g. http://127.0.0.1:8188 for ComfyUI
+  endpoint: string; 
   apiKey: string;
-  model: string;
-  loras: string[];
-  csvSource?: string;
+  model: string; // Used as the Checkpoint name in A1111
+  steps: number;
+  cfgScale: number;
+  sampler: string;
   removeBackground: boolean;
-  targetType: 'background' | 'character';
+  loras: SelectedLora[];
 }
