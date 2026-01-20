@@ -19,6 +19,8 @@ export interface Layer {
   y: number;
   scale: number;
   rotation: number;
+  skewX?: number;
+  skewY?: number;
   opacity: number;
   zIndex: number;
   flipX?: boolean;
@@ -33,6 +35,7 @@ export interface Layer {
 
 export interface Panel {
   id: string;
+  title: string;
   x: number;
   y: number;
   width: number;
@@ -78,4 +81,5 @@ export interface AISettings {
   loras: SelectedLora[];
   checkpointFolderPath: string;
   loraFolderPath: string;
+  comfyWorkflow?: any;
 }
