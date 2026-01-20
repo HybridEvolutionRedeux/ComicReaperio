@@ -61,6 +61,7 @@ export interface ComicProject {
   width: number;
   height: number;
   zoom: number;
+  lastModified: number;
 }
 
 export type AIBackend = 'gemini' | 'comfyui' | 'automatic1111';
@@ -76,6 +77,8 @@ export interface AISettings {
   endpoint: string; 
   apiKey: string;
   model: string; 
+  negativePrompt: string;
+  stylePreset: string;
   steps: number;
   cfgScale: number;
   sampler: string;

@@ -1,11 +1,11 @@
+
 {
   "name": "comic-craft-ai-studio",
   "version": "1.0.0",
   "description": "AI-powered Comic Book Studio",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "start": "npx serve .",
+    "dev": "npx serve ."
   },
   "dependencies": {
     "react": "^19.2.3",
@@ -13,9 +13,5 @@
     "@google/genai": "^1.35.0",
     "lucide-react": "^0.562.0",
     "html2canvas": "1.4.1"
-  },
-  "devDependencies": {
-    "vite": "^6.0.0",
-    "@vitejs/plugin-react": "^4.0.0"
   }
 }
