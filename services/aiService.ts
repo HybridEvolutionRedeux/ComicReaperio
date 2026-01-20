@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { AISettings, SelectedLora } from "../types";
 
@@ -5,6 +6,15 @@ import { AISettings, SelectedLora } from "../types";
  * AI Service Dispatcher
  * Manages connections between Google Gemini (Cloud) and Local Backends (SD/A1111)
  */
+
+export const checkSDStatus = async (endpoint: string): Promise<boolean> => {
+  try {
+    const response = await fetch(`${endpoint}/sdapi/v1/options`, { method: 'GET' });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
 
 export const fetchA1111Models = async (endpoint: string) => {
   try {
@@ -31,7 +41,6 @@ export const fetchA1111Loras = async (endpoint: string) => {
 };
 
 export const generateImage = async (prompt: string, settings: AISettings, aspectRatio: string = "1:1") => {
-  // Always initialize inside the call context for most up-to-date environment state
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
   if (settings.backend === 'gemini') {
@@ -52,14 +61,13 @@ const generateGeminiImage = async (ai: GoogleGenAI, prompt: string, aspectRatio:
   });
 
   const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-  if (!part) throw new Error("Gemini Image Generation Failed - No Data Returned.");
+  if (!part) throw new Error("Gemini Image Generation Failed.");
   return `data:image/png;base64,${part.inlineData.data}`;
 };
 
 const generateA1111Image = async (prompt: string, settings: AISettings) => {
   const url = settings.endpoint || "http://127.0.0.1:7860";
   
-  // Construct prompt with LoRA weights
   let finalPrompt = `comic book style, illustration, high resolution, ${prompt}`;
   if (settings.loras && settings.loras.length > 0) {
     const loraTags = settings.loras.map(l => `<lora:${l.name}:${l.weight}>`).join(", ");
@@ -85,15 +93,16 @@ const generateA1111Image = async (prompt: string, settings: AISettings) => {
     body: JSON.stringify(payload)
   });
 
-  if (!response.ok) {
-    throw new Error("Local SD Backend (Automatic1111) is unreachable. Check --api and --cors-allow-origins.");
-  }
-  
+  if (!response.ok) throw new Error("Local SD Backend is unreachable.");
   const data = await response.json();
   return `data:image/png;base64,${data.images[0]}`;
 };
 
-export const removeBackground = async (imageBase64: string) => {
+export const removeBackground = async (imageBase64: string, settings: AISettings) => {
+  if (settings.bgRemovalEngine === 'rembg') {
+    return removeBackgroundRembg(imageBase64, settings.endpoint);
+  }
+  
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   const data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
   
@@ -102,21 +111,45 @@ export const removeBackground = async (imageBase64: string) => {
     contents: {
       parts: [
         { inlineData: { data, mimeType: 'image/png' } },
-        { text: "INSTRUCTION: Cut out the main subject. The background MUST be 100% transparent. Output only the PNG with alpha channel." }
+        { text: "INSTRUCTION: Cut out the main subject. The background MUST be 100% transparent." }
       ]
     }
   });
 
   const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-  if (!part) throw new Error("Background removal failed.");
+  if (!part) throw new Error("Gemini BG removal failed.");
   return `data:image/png;base64,${part.inlineData.data}`;
+};
+
+const removeBackgroundRembg = async (imageBase64: string, endpoint: string) => {
+  const data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+  
+  // Using the standard sd-webui-rembg extension endpoint
+  try {
+    const response = await fetch(`${endpoint}/rembg`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input_image: data,
+        model: "u2net",
+        return_mask: false,
+        alpha_matting: false
+      })
+    });
+
+    if (!response.ok) throw new Error("Local Rembg extension not found or failed.");
+    const json = await response.json();
+    return `data:image/png;base64,${json.image}`;
+  } catch (e) {
+    throw new Error("Local Rembg failed. Make sure the extension is installed in A1111.");
+  }
 };
 
 export const enhancePrompt = async (basePrompt: string) => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Act as a professional comic book script writer. Transform the following basic idea into a highly descriptive visual prompt for an illustrator: "${basePrompt}". Include details about lighting, camera angle, and comic art style. Output only the prompt text.`,
+    contents: `Transform this idea into a visual prompt: "${basePrompt}".`,
   });
   return response.text?.trim() || basePrompt;
 };

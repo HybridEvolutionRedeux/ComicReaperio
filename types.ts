@@ -58,6 +58,7 @@ export interface ComicProject {
 }
 
 export type AIBackend = 'gemini' | 'comfyui' | 'automatic1111';
+export type BGRemovalEngine = 'gemini' | 'rembg';
 
 export interface SelectedLora {
   name: string;
@@ -68,10 +69,13 @@ export interface AISettings {
   backend: AIBackend;
   endpoint: string; 
   apiKey: string;
-  model: string; // Used as the Checkpoint name in A1111
+  model: string; 
   steps: number;
   cfgScale: number;
   sampler: string;
   removeBackground: boolean;
+  bgRemovalEngine: BGRemovalEngine;
   loras: SelectedLora[];
+  checkpointFolderPath: string;
+  loraFolderPath: string;
 }
