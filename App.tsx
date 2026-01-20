@@ -173,7 +173,7 @@ const App: React.FC = () => {
     a.href = url;
     a.download = `${project.title.toLowerCase().replace(/\s+/g, '_')}.comic.json`;
     a.click();
-    setStatusMessage("Exported to PyCharm workspace.");
+    setStatusMessage("Project synchronized to workspace.");
   };
 
   const handleAIProduction = async () => {
@@ -226,6 +226,7 @@ const App: React.FC = () => {
             setSelectedLayerId(lid);
           }} />
           <ToolbarBtn icon={<Wand2 size={18}/>} label="AI Generator" onClick={() => setShowAIWindow(true)} active={showAIWindow} />
+          <ToolbarBtn icon={<Layout size={18}/>} label="Page Presets" onClick={() => setShowCanvasWindow(true)} active={showCanvasWindow} />
           <ToolbarBtn icon={<Grid3X3 size={18}/>} label="Templates" onClick={() => setShowLayoutWindow(true)} active={showLayoutWindow} />
           
           <div className="mt-auto flex flex-col gap-4 mb-4">
@@ -340,6 +341,37 @@ const App: React.FC = () => {
            </div>
         </div>
       </div>
+
+      {/* Page Presets Window */}
+      {showCanvasWindow && (
+        <FloatingWindow title="PAGE PRESETS" onClose={() => setShowCanvasWindow(false)} width="w-[450px]">
+           <div className="grid grid-cols-1 gap-2">
+              {Object.entries(CANVAS_PRESETS).map(([key, val]) => (
+                <button key={key} onClick={() => { setProject(p => ({...p, width: val.width, height: val.height })); setShowCanvasWindow(false); }} className="bg-black/60 p-4 rounded-xl border border-white/5 hover:border-indigo-600 transition-all flex items-center justify-between text-left group">
+                   <div>
+                      <div className="text-[11px] font-black uppercase text-white group-hover:text-indigo-400">{val.name}</div>
+                      <div className="text-[10px] text-gray-600 font-mono mt-1">{val.width} x {val.height} PX</div>
+                   </div>
+                   <div className="text-[9px] font-black text-indigo-500 uppercase tracking-widest px-2 py-1 bg-indigo-500/10 rounded">{val.category}</div>
+                </button>
+              ))}
+           </div>
+        </FloatingWindow>
+      )}
+
+      {/* Templates Window */}
+      {showLayoutWindow && (
+        <FloatingWindow title="PANEL TEMPLATES" onClose={() => setShowLayoutWindow(false)} width="w-[450px]">
+           <div className="grid grid-cols-1 gap-2">
+              {Object.entries(PANEL_LAYOUTS).map(([key, val]) => (
+                <button key={key} onClick={() => applyLayout(key as keyof typeof PANEL_LAYOUTS)} className="w-full bg-black/60 p-5 rounded-xl border border-white/5 hover:border-indigo-500 flex items-center justify-between group transition-all">
+                   <div className="text-left font-black uppercase text-white text-[11px] group-hover:text-indigo-400">{val.name}</div>
+                   <Grid3X3 size={18} className="text-gray-700 group-hover:text-indigo-500" />
+                </button>
+              ))}
+           </div>
+        </FloatingWindow>
+      )}
 
       {/* Project Window (Sync Focus) */}
       {showProjectWindow && (
@@ -463,7 +495,7 @@ const App: React.FC = () => {
            </div>
         </div>
         <div className="text-gray-600 font-black uppercase tracking-[0.2em] flex items-center gap-2">
-           <LayoutDashboard size={14}/> {project.panels.length} PANELS | {isOnline ? 'SYNC ON' : 'SYNC OFF'}
+           <LayoutDashboard size={14}/> {project.panels.length} PANELS | {isOnline ? 'CLOUD ACTIVE' : 'LOCAL MODE'}
         </div>
       </div>
     </div>
