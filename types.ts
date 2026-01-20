@@ -26,7 +26,7 @@ export interface Layer {
   flipX?: boolean;
   flipY?: boolean;
   filter?: string;
-  bubbleType?: 'speech' | 'thought' | 'shout';
+  bubbleType?: 'speech' | 'thought' | 'shout' | 'whisper';
   bubbleColor?: string;
   bubbleBorderColor?: string;
   font?: string;

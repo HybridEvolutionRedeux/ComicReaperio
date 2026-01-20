@@ -73,13 +73,18 @@ export const fetchLocalLoras = async (backend: AIBackend, endpoint: string) => {
   }
 };
 
-export const generateImage = async (prompt: string, settings: AISettings, aspectRatio: string = "1:1") => {
+/**
+ * Generates an image based on the chosen backend.
+ * Fix: Explicitly typed return value as Promise<string> to avoid 'unknown' type issues in components.
+ */
+export const generateImage = async (prompt: string, settings: AISettings, aspectRatio: string = "1:1"): Promise<string> => {
   const styleInjection = STYLE_PRESETS[settings.stylePreset] || "";
   const fullPrompt = `${styleInjection ? styleInjection + ", " : ""}${prompt}`;
 
   if (settings.backend === 'gemini') {
     if (!navigator.onLine) throw new Error("Cloud generator requires internet connection.");
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+    // Fix: correct initialization using named parameter as per guidelines.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     return generateGeminiImage(ai, fullPrompt, aspectRatio, settings.negativePrompt);
   } else if (settings.backend === 'automatic1111') {
     return generateA1111Image(fullPrompt, settings);
@@ -89,7 +94,11 @@ export const generateImage = async (prompt: string, settings: AISettings, aspect
   throw new Error(`Unsupported backend: ${settings.backend}`);
 };
 
-const generateGeminiImage = async (ai: GoogleGenAI, prompt: string, aspectRatio: any, negative: string) => {
+/**
+ * Generates image via Gemini model.
+ * Uses gemini-2.5-flash-image for standard image generation.
+ */
+const generateGeminiImage = async (ai: GoogleGenAI, prompt: string, aspectRatio: any, negative: string): Promise<string> => {
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: { 
@@ -100,12 +109,13 @@ const generateGeminiImage = async (ai: GoogleGenAI, prompt: string, aspectRatio:
     config: { imageConfig: { aspectRatio } }
   });
 
+  // Find the image part in response candidates as per guidelines.
   const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-  if (!part) throw new Error("Gemini Image Generation Failed.");
+  if (!part || !part.inlineData) throw new Error("Gemini Image Generation Failed.");
   return `data:image/png;base64,${part.inlineData.data}`;
 };
 
-const generateA1111Image = async (prompt: string, settings: AISettings) => {
+const generateA1111Image = async (prompt: string, settings: AISettings): Promise<string> => {
   const cleanEndpoint = settings.endpoint.replace(/\/$/, '') || "http://127.0.0.1:7860";
   const payload = {
     prompt: prompt + (settings.loras?.length ? settings.loras.map(l => `, <lora:${l.name}:${l.weight}>`).join("") : ""),
@@ -129,13 +139,96 @@ const generateA1111Image = async (prompt: string, settings: AISettings) => {
   return `data:image/png;base64,${data.images[0]}`;
 };
 
-const generateComfyImage = async (prompt: string, settings: AISettings) => {
-  throw new Error("ComfyUI workflow bridge not active.");
+/**
+ * Generates image via ComfyUI.
+ * Fix: Explicitly typed Promise as <string> to ensure consistent return types.
+ */
+const generateComfyImage = async (prompt: string, settings: AISettings): Promise<string> => {
+  const cleanEndpoint = settings.endpoint.replace(/\/$/, '') || "http://127.0.0.1:8188";
+  
+  const workflow = {
+    "3": {
+      "inputs": {
+        "seed": Math.floor(Math.random() * 1000000),
+        "steps": settings.steps || 20,
+        "cfg": settings.cfgScale || 7,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "denoise": 1,
+        "model": ["4", 0],
+        "positive": ["6", 0],
+        "negative": ["7", 0],
+        "latent_image": ["5", 0]
+      },
+      "class_type": "KSampler"
+    },
+    "4": {
+      "inputs": { "ckpt_name": settings.model || "v1-5-pruned-emaonly.ckpt" },
+      "class_type": "CheckpointLoaderSimple"
+    },
+    "5": {
+      "inputs": { "width": 1024, "height": 1024, "batch_size": 1 },
+      "class_type": "EmptyLatentImage"
+    },
+    "6": {
+      "inputs": { "text": prompt, "clip": ["4", 1] },
+      "class_type": "CLIPTextEncode"
+    },
+    "7": {
+      "inputs": { "text": settings.negativePrompt || "text, watermark, low quality", "clip": ["4", 1] },
+      "class_type": "CLIPTextEncode"
+    },
+    "8": {
+      "inputs": { "samples": ["3", 0], "vae": ["4", 2] },
+      "class_type": "VAEDecode"
+    },
+    "9": {
+      "inputs": { "filename_prefix": "ComicCraft", "images": ["8", 0] },
+      "class_type": "SaveImage"
+    }
+  };
+
+  const response = await fetch(`${cleanEndpoint}/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: workflow })
+  });
+
+  if (!response.ok) throw new Error("ComfyUI backend unreachable.");
+  const data = await response.json();
+  const promptId = data.prompt_id;
+
+  return new Promise<string>((resolve, reject) => {
+    const checkStatus = async () => {
+      try {
+        const historyRes = await fetch(`${cleanEndpoint}/history/${promptId}`);
+        const history = await historyRes.json();
+        if (history[promptId]) {
+          const image = history[promptId].outputs["9"].images[0];
+          const viewUrl = `${cleanEndpoint}/view?filename=${image.filename}&subfolder=${image.subfolder}&type=${image.type}`;
+          const imgRes = await fetch(viewUrl);
+          const blob = await imgRes.blob();
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        } else {
+          setTimeout(checkStatus, 1500);
+        }
+      } catch (e) {
+        reject(e);
+      }
+    };
+    checkStatus();
+  });
 };
 
-export const removeBackground = async (imageBase64: string, settings: AISettings) => {
-  if (!navigator.onLine) return imageBase64; // Fallback: return as-is if offline
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+/**
+ * Removes background from an image using Gemini.
+ * Fix: initialization and explicit return type.
+ */
+export const removeBackground = async (imageBase64: string, settings: AISettings): Promise<string> => {
+  if (!navigator.onLine) return imageBase64; 
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
   
   const response = await ai.models.generateContent({
@@ -149,13 +242,16 @@ export const removeBackground = async (imageBase64: string, settings: AISettings
   });
 
   const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-  if (!part) throw new Error("Background removal failed.");
+  if (!part || !part.inlineData) throw new Error("Background removal failed.");
   return `data:image/png;base64,${part.inlineData.data}`;
 };
 
-export const enhancePrompt = async (basePrompt: string) => {
+/**
+ * Enhances a prompt using Gemini flash.
+ */
+export const enhancePrompt = async (basePrompt: string): Promise<string> => {
   if (!navigator.onLine) return basePrompt;
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Detailed artist prompt for: "${basePrompt}"`,

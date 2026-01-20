@@ -142,6 +142,39 @@ const App: React.FC = () => {
     }));
   }, []);
 
+  const changeLayerZ = useCallback((pId: string, lId: string, direction: 'up' | 'down') => {
+    setProject(prev => {
+      const panel = prev.panels.find(p => p.id === pId);
+      if (!panel) return prev;
+      
+      const layers = [...panel.layers].sort((a, b) => a.zIndex - b.zIndex);
+      const idx = layers.findIndex(l => l.id === lId);
+      
+      if (direction === 'up' && idx < layers.length - 1) {
+        // Swap with the one above
+        const currentLayer = layers[idx];
+        const aboveLayer = layers[idx + 1];
+        const tempZ = currentLayer.zIndex;
+        currentLayer.zIndex = aboveLayer.zIndex;
+        aboveLayer.zIndex = tempZ;
+      } else if (direction === 'down' && idx > 0) {
+        // Swap with the one below
+        const currentLayer = layers[idx];
+        const belowLayer = layers[idx - 1];
+        const tempZ = currentLayer.zIndex;
+        currentLayer.zIndex = belowLayer.zIndex;
+        belowLayer.zIndex = tempZ;
+      } else {
+        return prev;
+      }
+      
+      return {
+        ...prev,
+        panels: prev.panels.map(p => p.id === pId ? { ...p, layers: [...layers] } : p)
+      };
+    });
+  }, []);
+
   const applyLayout = (layoutKey: keyof typeof PANEL_LAYOUTS) => {
     const layout = PANEL_LAYOUTS[layoutKey];
     const newPanels: Panel[] = layout.panels.map((p, i) => ({
@@ -166,7 +199,14 @@ const App: React.FC = () => {
   };
 
   const syncToPyCharm = () => {
-    const data = JSON.stringify(project, null, 2);
+    const data = JSON.stringify({
+      ...project,
+      metadata: {
+        backend: aiSettings.backend,
+        endpoint: aiSettings.endpoint,
+        exportedAt: new Date().toISOString()
+      }
+    }, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -176,12 +216,16 @@ const App: React.FC = () => {
     setStatusMessage("Project synchronized to workspace.");
   };
 
+  /**
+   * Orchestrates the AI image production pipeline.
+   * Fix: Explicitly typed 'img' as string to match state and function signatures.
+   */
   const handleAIProduction = async () => {
     if (!prompt) return;
     setIsGenerating(true);
     try {
       const enhanced = await aiService.enhancePrompt(prompt);
-      let img = await aiService.generateImage(enhanced, aiSettings);
+      let img: string = await aiService.generateImage(enhanced, aiSettings);
       if (aiSettings.removeBackground && isOnline) {
         img = await aiService.removeBackground(img, aiSettings);
       }
@@ -227,14 +271,14 @@ const App: React.FC = () => {
           }} />
           <ToolbarBtn icon={<Wand2 size={18}/>} label="AI Generator" onClick={() => setShowAIWindow(true)} active={showAIWindow} />
           <ToolbarBtn icon={<Layout size={18}/>} label="Page Presets" onClick={() => setShowCanvasWindow(true)} active={showCanvasWindow} />
-          <ToolbarBtn icon={<Grid3X3 size={18}/>} label="Templates" onClick={() => setShowLayoutWindow(true)} active={showLayoutWindow} />
+          <ToolbarBtn icon={<Grid3X3 size={18}/>} label="Panel Layouts" onClick={() => setShowLayoutWindow(true)} active={showLayoutWindow} />
           
           <div className="mt-auto flex flex-col gap-4 mb-4">
              <div className="relative">
                <ToolbarBtn icon={<Download size={18}/>} label="Export Menu" onClick={() => setShowExportMenu(!showExportMenu)} />
                {showExportMenu && (
                  <div className="absolute left-full bottom-0 ml-4 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-2 z-[500] w-36 flex flex-col gap-1">
-                    {['png', 'jpg', 'pdf'].map(fmt => (
+                    {['png', 'jpg', 'webp', 'pdf'].map(fmt => (
                        <button key={fmt} onClick={async () => {
                           if (!workspaceRef.current) return;
                           setShowExportMenu(false);
@@ -326,9 +370,13 @@ const App: React.FC = () => {
               </div>
            </div>
 
-           <div className="h-1/3 bg-[#0d0d0d] border-t border-white/5 p-5 space-y-5">
+           <div className="h-1/3 bg-[#0d0d0d] border-t border-white/5 p-5 space-y-5 overflow-y-auto custom-scrollbar">
               {selectedLayer && selectedPanelId ? (
                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-2">
+                       <button onClick={() => changeLayerZ(selectedPanelId, selectedLayer.id, 'up')} className="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded-xl text-[9px] font-black uppercase flex items-center justify-center gap-2 shadow-lg transition-all"><ChevronUp size={14}/> Bring Forward</button>
+                       <button onClick={() => changeLayerZ(selectedPanelId, selectedLayer.id, 'down')} className="bg-white/5 hover:bg-white/10 text-gray-400 p-2 rounded-xl text-[9px] font-black uppercase flex items-center justify-center gap-2 border border-white/5 transition-all"><ChevronDown size={14}/> Send Backward</button>
+                    </div>
                     <PropertyField label="Scale" value={selectedLayer.scale} step={0.05} onChange={v => updateLayer(selectedPanelId, selectedLayer.id, { scale: +v })} />
                     <PropertyField label="Rotation" value={selectedLayer.rotation} onChange={v => updateLayer(selectedPanelId, selectedLayer.id, { rotation: +v })} />
                  </div>
@@ -359,7 +407,7 @@ const App: React.FC = () => {
         </FloatingWindow>
       )}
 
-      {/* Templates Window */}
+      {/* Panel Layouts Window */}
       {showLayoutWindow && (
         <FloatingWindow title="PANEL TEMPLATES" onClose={() => setShowLayoutWindow(false)} width="w-[450px]">
            <div className="grid grid-cols-1 gap-2">
@@ -373,7 +421,7 @@ const App: React.FC = () => {
         </FloatingWindow>
       )}
 
-      {/* Project Window (Sync Focus) */}
+      {/* Project Hub (PyCharm Sync) */}
       {showProjectWindow && (
         <FloatingWindow title="PYCHARM WORKSPACE SYNC" onClose={() => setShowProjectWindow(false)} width="w-[580px]">
            <div className="flex gap-6 h-[400px]">
@@ -402,7 +450,7 @@ const App: React.FC = () => {
         </FloatingWindow>
       )}
 
-      {/* AI Forge (Hybrid Logic) */}
+      {/* Production Forge */}
       {showAIWindow && (
         <FloatingWindow title="PRODUCTION FORGE" onClose={() => setShowAIWindow(false)} width="w-[700px]">
            <div className="grid grid-cols-12 gap-8 h-[520px] p-2">
@@ -412,6 +460,7 @@ const App: React.FC = () => {
                     <select className="w-full bg-black border border-white/10 p-3 rounded-2xl text-[10px] font-black uppercase text-white outline-none" value={aiSettings.backend} onChange={e => setAiSettings({...aiSettings, backend: e.target.value as any})}>
                        <option value="gemini">Gemini Cloud (Internet Req)</option>
                        <option value="automatic1111">Local SD (A1111 API)</option>
+                       <option value="comfyui">ComfyUI (Workflow API)</option>
                     </select>
                  </div>
 
@@ -476,14 +525,14 @@ const App: React.FC = () => {
               <PropertyField label="Local API Endpoint" value={aiSettings.endpoint} onChange={v => setAiSettings({...aiSettings, endpoint: v})} />
               <div className="p-5 bg-indigo-600/10 rounded-2xl border border-indigo-500/20 flex items-center gap-4">
                  <ShieldCheck size={20} className="text-indigo-400" />
-                 <div className="text-[10px] font-black uppercase tracking-tighter text-gray-400">PyCharm local environment bridge active.</div>
+                 <div className="text-[10px] font-black uppercase tracking-tighter text-gray-400">Environment bridge active. Status: {isBackendAlive ? 'ONLINE' : 'OFFLINE'}</div>
               </div>
               <button onClick={() => { setShowSettingsWindow(false); loadLocalResources(); }} className="w-full bg-indigo-600 py-3 rounded-2xl font-black text-[11px] uppercase tracking-widest">Update Settings</button>
            </div>
         </FloatingWindow>
       )}
 
-      {/* System Footer Bar */}
+      {/* Footer Bar */}
       <div className="h-9 bg-[#080808] border-t border-white/5 px-5 flex items-center justify-between text-[11px] z-[200]">
         <div className="flex items-center gap-8">
            <div className="flex items-center gap-3">
@@ -566,7 +615,7 @@ const PanelItem = memo(({ panel, isSelected, selectedLayerId, onUpdateLayer, onP
     }
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('mouseup', handlePointerUp);
     };
   }, [draggingTailId, draggingLayerId, handlePointerMove, handlePointerUp]);
 

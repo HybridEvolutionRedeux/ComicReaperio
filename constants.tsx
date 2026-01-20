@@ -30,6 +30,12 @@ export const SpeechBubble = ({ type, color = 'white', border = 'black', tailX = 
           <path d={`M5,40 L15,10 L40,5 L65,10 L95,40 L65,70 L${tailX},${tailY} L15,70 Z`} fill={color} stroke={border} strokeWidth="3" />
         </svg>
       );
+    case 'whisper':
+      return (
+        <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-lg overflow-visible">
+          <path d={`M5,40 Q5,10 50,10 Q95,10 95,40 Q95,70 50,70 Q45,70 ${tailX},${tailY} Q35,70 5,70 Q5,40 5,40`} fill={color} stroke={border} strokeWidth="3" strokeDasharray="5,5" />
+        </svg>
+      );
     default:
       return (
         <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-lg overflow-visible">
