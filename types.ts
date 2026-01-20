@@ -24,8 +24,11 @@ export interface Layer {
   opacity: number;
   zIndex: number;
   flipX?: boolean;
+  flipY?: boolean;
   filter?: string;
   bubbleType?: 'speech' | 'thought' | 'shout';
+  bubbleColor?: string;
+  bubbleBorderColor?: string;
   font?: string;
   fontSize?: number;
   color?: string;
