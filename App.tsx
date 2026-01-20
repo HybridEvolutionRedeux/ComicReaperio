@@ -399,16 +399,42 @@ const App: React.FC = () => {
                   )}
                 </div>
               ) : selectedPanel ? (
-                <div className="space-y-5 animate-in slide-in-from-right-2">
-                   <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-6 animate-in slide-in-from-right-2">
+                  <div className="grid grid-cols-2 gap-4">
                     <PropertyField label="X Pos (px)" value={Math.round(selectedPanel.x)} onChange={v => updatePanel(selectedPanelId, { x: +v })} />
                     <PropertyField label="Y Pos (px)" value={Math.round(selectedPanel.y)} onChange={v => updatePanel(selectedPanelId, { y: +v })} />
                     <PropertyField label="Width" value={selectedPanel.width} onChange={v => updatePanel(selectedPanelId, { width: +v })} />
                     <PropertyField label="Height" value={selectedPanel.height} onChange={v => updatePanel(selectedPanelId, { height: +v })} />
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-4">
                     <label className="text-[8px] font-black text-gray-500 uppercase">Panel Background</label>
-                    <input type="color" value={selectedPanel.backgroundColor} onChange={e => updatePanel(selectedPanelId, { backgroundColor: e.target.value })} className="w-full h-10 bg-black rounded-lg border border-white/10 cursor-pointer p-1" />
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {['transparent', '#ffffff', '#fdf6e3', '#f0f0f0', '#000000', ...COLORS].filter((c, i, a) => a.indexOf(c) === i).map(c => (
+                        <button 
+                          key={c} 
+                          onClick={() => updatePanel(selectedPanelId, { backgroundColor: c })} 
+                          className={`w-6 h-6 rounded-md border border-white/10 relative overflow-hidden transition-all ${selectedPanel.backgroundColor === c ? 'ring-2 ring-indigo-500 scale-110 shadow-lg' : 'hover:border-white/30'}`} 
+                          style={{ backgroundColor: c === 'transparent' ? 'transparent' : c }} 
+                        >
+                          {c === 'transparent' && (
+                            <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%)', backgroundSize: '4px 4px' }} />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input 
+                        type="color" 
+                        value={selectedPanel.backgroundColor === 'transparent' ? '#ffffff' : selectedPanel.backgroundColor} 
+                        onChange={e => updatePanel(selectedPanelId, { backgroundColor: e.target.value })} 
+                        className="w-10 h-10 bg-black rounded-lg border border-white/10 cursor-pointer p-1 shrink-0" 
+                      />
+                      <div className="flex-1 text-[10px] font-mono text-gray-400 bg-black/40 p-2 rounded-lg border border-white/5 uppercase tracking-wider flex items-center justify-between">
+                        <span>{selectedPanel.backgroundColor}</span>
+                        {selectedPanel.backgroundColor === 'transparent' && <span className="text-[8px] font-black text-indigo-400">ALPHA</span>}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -500,36 +526,47 @@ const App: React.FC = () => {
 
 const PanelItem = memo(({ panel, isSelected, selectedLayerId, onUpdateLayer, onPointerDown }: any) => {
   const [draggingTailId, setDraggingTailId] = useState<string | null>(null);
+  const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null);
+  const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0, layerX: 0, layerY: 0 });
   const bubbleRefs = useRef<{[key: string]: HTMLDivElement | null}>({});
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  const handleTailPointerMove = useCallback((e: PointerEvent) => {
-    if (!draggingTailId || !bubbleRefs.current[draggingTailId]) return;
-    
-    const rect = bubbleRefs.current[draggingTailId]!.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
-    
-    // Clamp to reasonable bubble area or slightly beyond
-    onUpdateLayer(panel.id, draggingTailId, { tailX: x, tailY: y });
-  }, [draggingTailId, panel.id, onUpdateLayer]);
+  const handlePointerMove = useCallback((e: PointerEvent) => {
+    if (draggingTailId && bubbleRefs.current[draggingTailId]) {
+      const rect = bubbleRefs.current[draggingTailId]!.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      onUpdateLayer(panel.id, draggingTailId, { tailX: x, tailY: y });
+    } else if (draggingLayerId && panelRef.current) {
+      const rect = panelRef.current.getBoundingClientRect();
+      const dx = (e.clientX - dragStartPos.x) / rect.width * 100;
+      const dy = (e.clientY - dragStartPos.y) / rect.height * 100;
+      onUpdateLayer(panel.id, draggingLayerId, { 
+        x: dragStartPos.layerX + dx, 
+        y: dragStartPos.layerY + dy 
+      });
+    }
+  }, [draggingTailId, draggingLayerId, dragStartPos, panel.id, onUpdateLayer]);
 
-  const handleTailPointerUp = useCallback(() => {
+  const handlePointerUp = useCallback(() => {
     setDraggingTailId(null);
+    setDraggingLayerId(null);
   }, []);
 
   useEffect(() => {
-    if (draggingTailId) {
-      window.addEventListener('pointermove', handleTailPointerMove);
-      window.addEventListener('pointerup', handleTailPointerUp);
+    if (draggingTailId || draggingLayerId) {
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
     }
     return () => {
-      window.removeEventListener('pointermove', handleTailPointerMove);
-      window.removeEventListener('pointerup', handleTailPointerUp);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
     };
-  }, [draggingTailId, handleTailPointerMove, handleTailPointerUp]);
+  }, [draggingTailId, draggingLayerId, handlePointerMove, handlePointerUp]);
 
   return (
     <div 
+      ref={panelRef}
       onPointerDown={onPointerDown}
       className={`absolute cursor-move transition-all duration-300
         ${isSelected ? 'ring-2 ring-indigo-500 ring-offset-2 z-[50] shadow-2xl scale-[1.005]' : 'z-[10]'}`}
@@ -547,9 +584,15 @@ const PanelItem = memo(({ panel, isSelected, selectedLayerId, onUpdateLayer, onP
         return (
           <div 
             key={layer.id} 
-            /* Fix: Explicitly wrap assignment in braces to return void, resolving TypeScript error about Ref callback return type */
             ref={el => { bubbleRefs.current[layer.id] = el; }}
-            className={`absolute pointer-events-auto transition-shadow ${isLayerSelected ? 'outline outline-2 outline-indigo-400 outline-offset-4 z-[100]' : ''}`} 
+            onPointerDown={(e) => {
+               if (isLayerSelected) {
+                  e.stopPropagation();
+                  setDraggingLayerId(layer.id);
+                  setDragStartPos({ x: e.clientX, y: e.clientY, layerX: layer.x, layerY: layer.y });
+               }
+            }}
+            className={`absolute pointer-events-auto transition-shadow ${isLayerSelected ? 'outline outline-2 outline-indigo-400 outline-offset-4 z-[100]' : ''} ${draggingLayerId === layer.id ? 'cursor-grabbing' : 'cursor-pointer'}`} 
             style={{ 
               left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.scale * 100}%`, 
               transform, 
