@@ -10,9 +10,9 @@ import {
   MessageSquare, MousePointer2, Box, File, Edit3, Smile, Info, Maximize, RotateCw,
   FlipHorizontal, FlipVertical, MoveDiagonal, Folder, ChevronRight, FileType, 
   MoreVertical, Share, Printer, DownloadCloud, Image as ImageIcon, Save, ShieldCheck,
-  Package, LayoutDashboard, Database, Wifi, WifiOff, HardDriveDownload
+  Package, LayoutDashboard, Database, Wifi, WifiOff, HardDriveDownload, FilePlus, Copy, X
 } from 'lucide-react';
-import { ComicProject, Panel, Layer, LayerType, AISettings, AIBackend } from './types';
+import { ComicProject, Page, Panel, Layer, LayerType, AISettings, AIBackend } from './types';
 import { FloatingWindow } from './components/FloatingWindow';
 import { FONT_PRESETS, COLORS, SpeechBubble } from './constants';
 import * as aiService from './services/aiService';
@@ -20,10 +20,14 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
 const CANVAS_PRESETS = {
-  GOLDEN_AGE: { width: 1200, height: 1800, name: 'Golden Age Comic', category: 'Print' },
-  MANGA: { width: 1000, height: 1500, name: 'Tankobon (Manga)', category: 'Print' },
+  GOLDEN_AGE: { width: 1200, height: 1800, name: 'Golden Age Comic', category: 'Comic' },
+  MANGA: { width: 1000, height: 1500, name: 'Tankobon (Manga)', category: 'Comic' },
+  GAME_CARD: { width: 750, height: 1050, name: 'Standard Game Card', category: 'Game' },
+  GREETING_CARD: { width: 1500, height: 1050, name: 'Greeting Card (Folded)', category: 'Stationery' },
+  BOOK_COVER: { width: 1400, height: 2100, name: 'Front/Back Cover', category: 'Book' },
+  BOOK_SPINE: { width: 250, height: 2100, name: 'Spine (Elbow)', category: 'Book' },
+  BOOK_SLEEVE: { width: 500, height: 2100, name: 'Inner Sleeve', category: 'Book' },
   WIDESCREEN: { width: 1920, height: 1080, name: 'HD Cinematic', category: 'Digital' },
-  INSTA_POST: { width: 1080, height: 1080, name: 'Square Panel', category: 'Digital' },
 };
 
 const PANEL_LAYOUTS = {
@@ -42,13 +46,23 @@ const PANEL_LAYOUTS = {
       { x: 0.05, y: 0.56, w: 0.28, h: 0.38 }, { x: 0.36, y: 0.56, w: 0.28, h: 0.38 }, { x: 0.67, y: 0.56, w: 0.28, h: 0.38 }
     ]
   },
-  DYNAMIC_Z: {
-    name: 'Dynamic Z-Flow',
+  GAME_CARD_2: {
+    name: '2-Panel Game Card',
     panels: [
-      { x: 0.05, y: 0.05, w: 0.6, h: 0.3 },
-      { x: 0.68, y: 0.05, w: 0.27, h: 0.3 },
-      { x: 0.05, y: 0.38, w: 0.9, h: 0.25 },
-      { x: 0.05, y: 0.66, w: 0.43, h: 0.29 }, { x: 0.52, y: 0.66, w: 0.43, h: 0.29 }
+      { x: 0.05, y: 0.05, w: 0.9, h: 0.55 }, // Art Panel
+      { x: 0.05, y: 0.65, w: 0.9, h: 0.30 }  // Text Panel
+    ]
+  },
+  GREETING_SINGLE: {
+    name: 'Greeting Card Center',
+    panels: [
+      { x: 0.1, y: 0.1, w: 0.8, h: 0.8 }
+    ]
+  },
+  FULL_SPLASH: {
+    name: 'Full Page Splash',
+    panels: [
+      { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }
     ]
   }
 };
@@ -59,11 +73,36 @@ const App: React.FC = () => {
   const [project, setProject] = useState<ComicProject>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? JSON.parse(saved) : { id: '1', title: 'New Comic', author: 'Artist', panels: [], width: 1200, height: 1800, zoom: 0.4, lastModified: Date.now() };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.panels) {
+          return {
+            id: parsed.id || '1',
+            title: parsed.title || 'New Comic',
+            author: parsed.author || 'Artist',
+            pages: [{ id: 'pg1', name: 'Page 1', width: parsed.width, height: parsed.height, panels: parsed.panels }],
+            currentPageIndex: 0,
+            zoom: parsed.zoom || 0.4,
+            lastModified: parsed.lastModified || Date.now()
+          };
+        }
+        return parsed;
+      }
+      return { 
+        id: '1', 
+        title: 'New Comic', 
+        author: 'Artist', 
+        pages: [{ id: 'pg1', name: 'Cover', width: 1200, height: 1800, panels: [] }],
+        currentPageIndex: 0, 
+        zoom: 0.4, 
+        lastModified: Date.now() 
+      };
     } catch {
-      return { id: '1', title: 'New Comic', author: 'Artist', panels: [], width: 1200, height: 1800, zoom: 0.4, lastModified: Date.now() };
+      return { id: '1', title: 'New Comic', author: 'Artist', pages: [{ id: 'pg1', name: 'Cover', width: 1200, height: 1800, panels: [] }], currentPageIndex: 0, zoom: 0.4, lastModified: Date.now() };
     }
   });
+
+  const currentPage = project.pages[project.currentPageIndex] || project.pages[0];
 
   const [aiSettings, setAiSettings] = useState<AISettings>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_settings`);
@@ -88,14 +127,12 @@ const App: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [aiPreview, setAiPreview] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("Studio Ready.");
-  const [tooltip, setTooltip] = useState('Workspace active.');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [availableLoras, setAvailableLoras] = useState<string[]>([]);
   const [layerContextMenu, setLayerContextMenu] = useState<{ x: number, y: number, pId: string, lId: string } | null>(null);
 
   const workspaceRef = useRef<HTMLDivElement>(null);
 
-  // Network & Heartbeat Effects
   useEffect(() => {
     const handleStatus = () => setIsOnline(navigator.onLine);
     window.addEventListener('online', handleStatus);
@@ -112,7 +149,7 @@ const App: React.FC = () => {
       setIsBackendAlive(alive);
     };
     checkStatus();
-    const interval = setInterval(checkStatus, 30000); // Heartbeat every 30s
+    const interval = setInterval(checkStatus, 30000); 
     return () => clearInterval(interval);
   }, [aiSettings.backend, aiSettings.endpoint]);
 
@@ -131,34 +168,49 @@ const App: React.FC = () => {
 
   useEffect(() => { loadLocalResources(); }, [loadLocalResources]);
 
+  const updateCurrentPage = useCallback((updates: Partial<Page>) => {
+    setProject(prev => {
+      const pages = [...prev.pages];
+      pages[prev.currentPageIndex] = { ...pages[prev.currentPageIndex], ...updates };
+      return { ...prev, pages };
+    });
+  }, []);
+
   const updatePanel = useCallback((id: string, updates: Partial<Panel>) => {
-    setProject(prev => ({ ...prev, panels: prev.panels.map(p => p.id === id ? { ...p, ...updates } : p) }));
+    setProject(prev => {
+      const pages = [...prev.pages];
+      const page = pages[prev.currentPageIndex];
+      page.panels = page.panels.map(p => p.id === id ? { ...p, ...updates } : p);
+      return { ...prev, pages };
+    });
   }, []);
 
   const updateLayer = useCallback((pId: string, lId: string, updates: Partial<Layer>) => {
-    setProject(prev => ({
-      ...prev,
-      panels: prev.panels.map(p => p.id === pId ? { ...p, layers: p.layers.map(l => l.id === lId ? { ...l, ...updates } : l) } : p)
-    }));
+    setProject(prev => {
+      const pages = [...prev.pages];
+      const page = pages[prev.currentPageIndex];
+      page.panels = page.panels.map(p => p.id === pId ? { ...p, layers: p.layers.map(l => l.id === lId ? { ...l, ...updates } : l) } : p);
+      return { ...prev, pages };
+    });
   }, []);
 
   const changeLayerZ = useCallback((pId: string, lId: string, direction: 'up' | 'down') => {
     setProject(prev => {
-      const panel = prev.panels.find(p => p.id === pId);
+      const pages = [...prev.pages];
+      const page = pages[prev.currentPageIndex];
+      const panel = page.panels.find(p => p.id === pId);
       if (!panel) return prev;
       
       const layers = [...panel.layers].sort((a, b) => a.zIndex - b.zIndex);
       const idx = layers.findIndex(l => l.id === lId);
       
       if (direction === 'up' && idx < layers.length - 1) {
-        // Swap with the one above
         const currentLayer = layers[idx];
         const aboveLayer = layers[idx + 1];
         const tempZ = currentLayer.zIndex;
         currentLayer.zIndex = aboveLayer.zIndex;
         aboveLayer.zIndex = tempZ;
       } else if (direction === 'down' && idx > 0) {
-        // Swap with the one below
         const currentLayer = layers[idx];
         const belowLayer = layers[idx - 1];
         const tempZ = currentLayer.zIndex;
@@ -168,22 +220,45 @@ const App: React.FC = () => {
         return prev;
       }
       
-      return {
-        ...prev,
-        panels: prev.panels.map(p => p.id === pId ? { ...p, layers: [...layers] } : p)
-      };
+      return { ...prev, pages };
     });
   }, []);
+
+  const addNewPage = (name: string = `Page ${project.pages.length + 1}`, presetKey: keyof typeof CANVAS_PRESETS = 'GOLDEN_AGE') => {
+    const preset = CANVAS_PRESETS[presetKey];
+    const newPage: Page = {
+      id: `pg_${Date.now()}`,
+      name,
+      width: preset.width,
+      height: preset.height,
+      panels: []
+    };
+    setProject(prev => ({
+      ...prev,
+      pages: [...prev.pages, newPage],
+      currentPageIndex: prev.pages.length
+    }));
+    setStatusMessage(`Added ${name}`);
+  };
+
+  const removePage = (index: number) => {
+    if (project.pages.length <= 1) return;
+    setProject(prev => {
+      const pages = prev.pages.filter((_, i) => i !== index);
+      const newIdx = Math.min(prev.currentPageIndex, pages.length - 1);
+      return { ...prev, pages, currentPageIndex: newIdx };
+    });
+  };
 
   const applyLayout = (layoutKey: keyof typeof PANEL_LAYOUTS) => {
     const layout = PANEL_LAYOUTS[layoutKey];
     const newPanels: Panel[] = layout.panels.map((p, i) => ({
       id: `p_layout_${Date.now()}_${i}`,
       title: `Panel ${i + 1}`,
-      x: p.x * project.width,
-      y: p.y * project.height,
-      width: p.w * project.width,
-      height: p.h * project.height,
+      x: p.x * currentPage.width,
+      y: p.y * currentPage.height,
+      width: p.w * currentPage.width,
+      height: p.h * currentPage.height,
       rotation: 0,
       zIndex: i + 1,
       borderThickness: 4,
@@ -193,7 +268,7 @@ const App: React.FC = () => {
       backgroundColor: '#ffffff',
       layers: []
     }));
-    setProject(prev => ({ ...prev, panels: newPanels }));
+    updateCurrentPage({ panels: newPanels });
     setShowLayoutWindow(false);
     setStatusMessage("Template Applied.");
   };
@@ -216,10 +291,6 @@ const App: React.FC = () => {
     setStatusMessage("Project synchronized to workspace.");
   };
 
-  /**
-   * Orchestrates the AI image production pipeline.
-   * Fix: Explicitly typed 'img' as string to match state and function signatures.
-   */
   const handleAIProduction = async () => {
     if (!prompt) return;
     setIsGenerating(true);
@@ -234,7 +305,7 @@ const App: React.FC = () => {
     finally { setIsGenerating(false); }
   };
 
-  const selectedPanel = project.panels.find(p => p.id === selectedPanelId);
+  const selectedPanel = currentPage.panels.find(p => p.id === selectedPanelId);
   const selectedLayer = selectedPanel?.layers.find(l => l.id === selectedLayerId);
 
   return (
@@ -254,15 +325,16 @@ const App: React.FC = () => {
 
           <ToolbarBtn icon={<Plus size={18}/>} label="New Panel" onClick={() => {
             const id = `p${Date.now()}`;
-            setProject(p => ({...p, panels: [...p.panels, {
-              id, title: `Panel ${p.panels.length+1}`, x: 100, y: 100, width: 400, height: 300, rotation: 0, zIndex: p.panels.length+1,
+            const panels = [...currentPage.panels, {
+              id, title: `Panel ${currentPage.panels.length+1}`, x: 100, y: 100, width: 400, height: 300, rotation: 0, zIndex: currentPage.panels.length+1,
               borderThickness: 4, borderColor: '#000000', borderOpacity: 1, shadowIntensity: 4, backgroundColor: '#ffffff', layers: []
-            }]}));
+            }];
+            updateCurrentPage({ panels });
             setSelectedPanelId(id);
           }} />
           <ToolbarBtn icon={<MessageSquare size={18}/>} label="Add Bubble" onClick={() => {
             if (!selectedPanelId) return setStatusMessage("Select panel first.");
-            const p = project.panels.find(pan => pan.id === selectedPanelId);
+            const p = currentPage.panels.find(pan => pan.id === selectedPanelId);
             if (!p) return;
             const lid = `l_bub_${Date.now()}`;
             const b: Layer = { id: lid, type: LayerType.TEXT_BUBBLE, name: 'Dialogue', content: 'WRITE...', x: 50, y: 50, scale: 0.3, rotation: 0, opacity: 1, zIndex: p.layers.length + 1, bubbleType: 'speech', bubbleColor: '#ffffff', bubbleBorderColor: '#000000', font: 'Bangers', fontSize: 24, color: '#000000', tailX: 20, tailY: 85 };
@@ -270,7 +342,7 @@ const App: React.FC = () => {
             setSelectedLayerId(lid);
           }} />
           <ToolbarBtn icon={<Wand2 size={18}/>} label="AI Generator" onClick={() => setShowAIWindow(true)} active={showAIWindow} />
-          <ToolbarBtn icon={<Layout size={18}/>} label="Page Presets" onClick={() => setShowCanvasWindow(true)} active={showCanvasWindow} />
+          <ToolbarBtn icon={<Layout size={18}/>} label="Page Setup" onClick={() => setShowCanvasWindow(true)} active={showCanvasWindow} />
           <ToolbarBtn icon={<Grid3X3 size={18}/>} label="Panel Layouts" onClick={() => setShowLayoutWindow(true)} active={showLayoutWindow} />
           
           <div className="mt-auto flex flex-col gap-4 mb-4">
@@ -299,40 +371,66 @@ const App: React.FC = () => {
         </div>
 
         {/* Studio Stage */}
-        <div className="flex-1 relative bg-[#0a0a0a] flex items-center justify-center overflow-auto custom-scrollbar" onPointerDown={() => { setSelectedPanelId(null); setSelectedLayerId(null); }}>
-          <div 
-            ref={workspaceRef} 
-            className="bg-white shadow-2xl relative transition-transform duration-200" 
-            style={{ width: project.width, height: project.height, transform: `scale(${project.zoom})` }}
-          >
-            {project.panels.map(p => (
-              <PanelItem 
-                key={p.id} panel={p} isSelected={selectedPanelId === p.id} 
-                selectedLayerId={selectedLayerId} onUpdateLayer={updateLayer}
-                onPointerDown={(e: any) => { e.stopPropagation(); setSelectedPanelId(p.id); setSelectedLayerId(null); }}
-              />
-            ))}
+        <div className="flex-1 flex flex-col bg-[#0a0a0a] relative">
+          
+          {/* Page Tabs Header */}
+          <div className="h-14 border-b border-white/5 flex items-center px-4 gap-2 overflow-x-auto no-scrollbar bg-[#0d0d0d]">
+             {project.pages.map((pg, idx) => (
+                <div 
+                  key={pg.id} 
+                  className={`flex items-center gap-3 px-4 py-2 rounded-t-xl cursor-pointer transition-all border-x border-t border-transparent ${project.currentPageIndex === idx ? 'bg-[#111] text-indigo-400 border-white/5' : 'hover:bg-white/5 text-gray-500'}`}
+                  onClick={() => { setProject(p => ({...p, currentPageIndex: idx})); setSelectedPanelId(null); setSelectedLayerId(null); }}
+                >
+                   <span className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap">{pg.name}</span>
+                   {project.pages.length > 1 && (
+                     <X size={12} className="hover:text-red-500 transition-colors" onClick={(e) => { e.stopPropagation(); removePage(idx); }} />
+                   )}
+                </div>
+             ))}
+             <button 
+               onClick={() => addNewPage()}
+               className="p-2 text-gray-700 hover:text-indigo-400 transition-all hover:bg-indigo-500/10 rounded-lg ml-2"
+               title="Add Blank Page"
+             >
+                <FilePlus size={18} />
+             </button>
           </div>
 
-          {/* Network Status HUD */}
-          <div className="absolute top-6 left-6 flex items-center gap-5 bg-black/80 backdrop-blur-xl border border-white/5 rounded-2xl px-5 py-2.5 pointer-events-none shadow-2xl">
-             <div className="flex items-center gap-2">
-                {isOnline ? <Wifi size={14} className="text-green-500" /> : <WifiOff size={14} className="text-red-500" />}
-                <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{isOnline ? 'CLOUD ENABLED' : 'OFFLINE MODE'}</span>
-             </div>
-             <div className="w-px h-4 bg-white/10" />
-             <div className="flex items-center gap-2">
-                <Cpu size={14} className={isBackendAlive ? 'text-indigo-400' : 'text-gray-700'} />
-                <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                   {aiSettings.backend.toUpperCase()}: {isBackendAlive ? 'ONLINE' : 'UNREACHABLE'}
-                </span>
-             </div>
-          </div>
+          <div className="flex-1 relative flex items-center justify-center overflow-auto custom-scrollbar" onPointerDown={() => { setSelectedPanelId(null); setSelectedLayerId(null); }}>
+            <div 
+              ref={workspaceRef} 
+              className="bg-white shadow-2xl relative transition-transform duration-200" 
+              style={{ width: currentPage.width, height: currentPage.height, transform: `scale(${project.zoom})` }}
+            >
+              {currentPage.panels.map(p => (
+                <PanelItem 
+                  key={p.id} panel={p} isSelected={selectedPanelId === p.id} 
+                  selectedLayerId={selectedLayerId} onUpdateLayer={updateLayer}
+                  onPointerDown={(e: any) => { e.stopPropagation(); setSelectedPanelId(p.id); setSelectedLayerId(null); }}
+                />
+              ))}
+            </div>
 
-          <div className="absolute bottom-8 bg-[#111]/90 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3 flex items-center gap-8 shadow-2xl z-50">
-            <button onClick={() => setProject(p => ({...p, zoom: Math.max(0.1, p.zoom - 0.1)}))} className="hover:text-indigo-400"><ZoomOut size={18}/></button>
-            <span className="text-[10px] font-black w-12 text-center text-white">{Math.round(project.zoom * 100)}%</span>
-            <button onClick={() => setProject(p => ({...p, zoom: Math.min(3, p.zoom + 0.1)}))} className="hover:text-indigo-400"><ZoomIn size={18}/></button>
+            {/* Network Status HUD */}
+            <div className="absolute top-6 left-6 flex items-center gap-5 bg-black/80 backdrop-blur-xl border border-white/5 rounded-2xl px-5 py-2.5 pointer-events-none shadow-2xl z-50">
+               <div className="flex items-center gap-2">
+                  {isOnline ? <Wifi size={14} className="text-green-500" /> : <WifiOff size={14} className="text-red-500" />}
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{isOnline ? 'CLOUD ENABLED' : 'OFFLINE MODE'}</span>
+               </div>
+               <div className="w-px h-4 bg-white/10" />
+               <div className="flex items-center gap-2">
+                  <Cpu size={14} className={isBackendAlive ? 'text-indigo-400' : 'text-gray-700'} />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                     {aiSettings.backend.toUpperCase()}: {isBackendAlive ? 'ONLINE' : 'UNREACHABLE'}
+                  </span>
+               </div>
+            </div>
+
+            <div className="absolute bottom-8 bg-[#111]/90 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3 flex items-center gap-8 shadow-2xl z-50">
+              <button onClick={() => setProject(p => ({...p, zoom: Math.max(0.1, p.zoom - 0.1)}))} className="hover:text-indigo-400"><ZoomOut size={18}/></button>
+              <span className="text-[10px] font-black w-12 text-center text-white">{Math.round(project.zoom * 100)}%</span>
+              <button onClick={() => setProject(p => ({...p, zoom: Math.min(3, p.zoom + 0.1)}))} className="hover:text-indigo-400"><ZoomIn size={18}/></button>
+            </div>
           </div>
         </div>
 
@@ -343,7 +441,14 @@ const App: React.FC = () => {
                 <h2 className="text-[10px] font-black uppercase tracking-widest text-indigo-400 flex items-center gap-2"><Layers size={14}/> Node Tree</h2>
               </div>
               <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
-                 {project.panels.map(panel => (
+                 <div className="mb-4">
+                    <div className="text-[9px] font-black text-gray-600 uppercase mb-2 tracking-widest ml-2">Active Page Info</div>
+                    <div className="px-3 py-2 bg-indigo-500/5 rounded-xl border border-indigo-500/10 flex flex-col gap-1">
+                       <span className="text-[11px] font-black text-white uppercase">{currentPage.name}</span>
+                       <span className="text-[9px] text-gray-500 font-mono">{currentPage.width} x {currentPage.height} PX</span>
+                    </div>
+                 </div>
+                 {currentPage.panels.map(panel => (
                     <div key={panel.id} className="space-y-1">
                        <div 
                          className={`flex items-center gap-2 p-2 rounded-xl cursor-pointer transition-all border border-transparent ${selectedPanelId === panel.id && !selectedLayerId ? 'bg-indigo-600/20 border-indigo-500/30 text-white' : 'hover:bg-white/5 text-gray-500'}`}
@@ -377,6 +482,47 @@ const App: React.FC = () => {
                        <button onClick={() => changeLayerZ(selectedPanelId, selectedLayer.id, 'up')} className="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded-xl text-[9px] font-black uppercase flex items-center justify-center gap-2 shadow-lg transition-all"><ChevronUp size={14}/> Bring Forward</button>
                        <button onClick={() => changeLayerZ(selectedPanelId, selectedLayer.id, 'down')} className="bg-white/5 hover:bg-white/10 text-gray-400 p-2 rounded-xl text-[9px] font-black uppercase flex items-center justify-center gap-2 border border-white/5 transition-all"><ChevronDown size={14}/> Send Backward</button>
                     </div>
+                    
+                    {selectedLayer.type === LayerType.TEXT_BUBBLE && (
+                      <div className="space-y-4 border-t border-white/5 pt-4">
+                        <div className="space-y-2">
+                           <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Bubble Style</label>
+                           <select 
+                             className="w-full bg-black border border-white/5 p-2 rounded-xl text-[10px] text-white"
+                             value={selectedLayer.bubbleType || 'speech'}
+                             onChange={e => updateLayer(selectedPanelId, selectedLayer.id, { bubbleType: e.target.value as any })}
+                           >
+                             <option value="speech">Standard Speech</option>
+                             <option value="thought">Thought</option>
+                             <option value="shout">Shout</option>
+                             <option value="whisper">Whisper</option>
+                           </select>
+                        </div>
+                        <PropertyField label="Text Content" value={selectedLayer.content} onChange={v => updateLayer(selectedPanelId, selectedLayer.id, { content: v })} />
+                        <div className="grid grid-cols-2 gap-2">
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black text-gray-600 uppercase">Bubble Color</label>
+                              <input type="color" value={selectedLayer.bubbleColor || '#ffffff'} onChange={e => updateLayer(selectedPanelId, selectedLayer.id, { bubbleColor: e.target.value })} className="w-full h-8 bg-black border border-white/5 rounded" />
+                           </div>
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black text-gray-600 uppercase">Border Color</label>
+                              <input type="color" value={selectedLayer.bubbleBorderColor || '#000000'} onChange={e => updateLayer(selectedPanelId, selectedLayer.id, { bubbleBorderColor: e.target.value })} className="w-full h-8 bg-black border border-white/5 rounded" />
+                           </div>
+                        </div>
+                        <div className="space-y-2">
+                           <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Font Family</label>
+                           <select 
+                             className="w-full bg-black border border-white/5 p-2 rounded-xl text-[10px] text-white"
+                             value={selectedLayer.font || 'Bangers'}
+                             onChange={e => updateLayer(selectedPanelId, selectedLayer.id, { font: e.target.value })}
+                           >
+                             {FONT_PRESETS.map(f => <option key={f} value={f}>{f}</option>)}
+                           </select>
+                        </div>
+                        <PropertyField label="Font Size" value={selectedLayer.fontSize || 24} onChange={v => updateLayer(selectedPanelId, selectedLayer.id, { fontSize: +v })} />
+                      </div>
+                    )}
+
                     <PropertyField label="Scale" value={selectedLayer.scale} step={0.05} onChange={v => updateLayer(selectedPanelId, selectedLayer.id, { scale: +v })} />
                     <PropertyField label="Rotation" value={selectedLayer.rotation} onChange={v => updateLayer(selectedPanelId, selectedLayer.id, { rotation: +v })} />
                  </div>
@@ -390,19 +536,62 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Page Presets Window */}
+      {/* Page Presets & Multi-Page Hub */}
       {showCanvasWindow && (
-        <FloatingWindow title="PAGE PRESETS" onClose={() => setShowCanvasWindow(false)} width="w-[450px]">
-           <div className="grid grid-cols-1 gap-2">
-              {Object.entries(CANVAS_PRESETS).map(([key, val]) => (
-                <button key={key} onClick={() => { setProject(p => ({...p, width: val.width, height: val.height })); setShowCanvasWindow(false); }} className="bg-black/60 p-4 rounded-xl border border-white/5 hover:border-indigo-600 transition-all flex items-center justify-between text-left group">
-                   <div>
-                      <div className="text-[11px] font-black uppercase text-white group-hover:text-indigo-400">{val.name}</div>
-                      <div className="text-[10px] text-gray-600 font-mono mt-1">{val.width} x {val.height} PX</div>
-                   </div>
-                   <div className="text-[9px] font-black text-indigo-500 uppercase tracking-widest px-2 py-1 bg-indigo-500/10 rounded">{val.category}</div>
+        <FloatingWindow title="PAGE MANAGEMENT & PRESETS" onClose={() => setShowCanvasWindow(false)} width="w-[550px]">
+           <div className="space-y-6">
+              <div className="p-4 bg-black/40 rounded-2xl border border-white/5">
+                <div className="text-[10px] font-black uppercase text-indigo-400 mb-4 tracking-widest">Active Page Settings</div>
+                <div className="grid grid-cols-2 gap-4">
+                  <PropertyField label="Page Name" value={currentPage.name} onChange={v => updateCurrentPage({ name: v })} />
+                  <div className="space-y-2">
+                     <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Presets Gallery</label>
+                     <select 
+                       className="w-full bg-black border border-white/5 p-3 rounded-2xl text-[11px] font-mono text-white outline-none"
+                       onChange={(e) => {
+                          const preset = CANVAS_PRESETS[e.target.value as keyof typeof CANVAS_PRESETS];
+                          updateCurrentPage({ width: preset.width, height: preset.height });
+                       }}
+                     >
+                        <option value="">Apply Preset...</option>
+                        {Object.entries(CANVAS_PRESETS).map(([key, val]) => (
+                          <option key={key} value={key}>{val.name} ({val.category})</option>
+                        ))}
+                     </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <button 
+                  onClick={() => addNewPage('Game Card', 'GAME_CARD')}
+                  className="bg-indigo-600/10 p-4 rounded-xl border border-indigo-500/20 hover:bg-indigo-600/20 transition-all flex flex-col gap-1 items-start group"
+                >
+                   <div className="text-[11px] font-black uppercase text-indigo-400 group-hover:text-indigo-300">Add Game Card</div>
+                   <div className="text-[9px] text-indigo-500/60 uppercase">Auto-scaled for Standard Poker</div>
                 </button>
-              ))}
+                <button 
+                  onClick={() => addNewPage('Greeting', 'GREETING_CARD')}
+                  className="bg-white/5 p-4 rounded-xl border border-white/10 hover:bg-white/10 transition-all flex flex-col gap-1 items-start group"
+                >
+                   <div className="text-[11px] font-black uppercase text-white group-hover:text-indigo-400">Add Greeting Card</div>
+                   <div className="text-[9px] text-gray-600 uppercase">Single center panel preset</div>
+                </button>
+              </div>
+
+              <div className="p-4 bg-indigo-600/5 rounded-2xl border border-indigo-500/10">
+                <div className="text-[10px] font-black uppercase text-indigo-400 mb-3 tracking-widest">Complete Book Setup</div>
+                <div className="flex flex-wrap gap-2">
+                   {[
+                     { name: 'Cover (Front)', key: 'BOOK_COVER' },
+                     { name: 'Spine (Elbow)', key: 'BOOK_SPINE' },
+                     { name: 'Sleeve (Inner)', key: 'BOOK_SLEEVE' },
+                     { name: 'Back Cover', key: 'BOOK_COVER' }
+                   ].map(b => (
+                     <button key={b.name} onClick={() => addNewPage(b.name, b.key as any)} className="px-3 py-1.5 bg-black/40 rounded-lg text-[9px] font-black uppercase text-gray-400 hover:text-white hover:bg-indigo-600 border border-white/5 transition-all">{b.name}</button>
+                   ))}
+                </div>
+              </div>
            </div>
         </FloatingWindow>
       )}
@@ -429,18 +618,22 @@ const App: React.FC = () => {
                  <ExplorerFolder label="Active Story" active />
                  <ExplorerFolder label="Assets Root" />
                  <div className="mt-auto pt-5 border-t border-white/5 flex flex-col gap-3">
-                    <button onClick={() => { setProject({ id: Date.now().toString(), title: 'New Comic', author: 'Artist', panels: [], width: 1200, height: 1800, zoom: 0.4, lastModified: Date.now() }); setShowProjectWindow(false); }} className="w-full bg-indigo-600 py-3 rounded-2xl text-[10px] font-black uppercase text-white shadow-xl hover:bg-indigo-500 transition-all">New Project</button>
+                    <button onClick={() => { setProject({ id: Date.now().toString(), title: 'New Comic', author: 'Artist', pages: [{ id: 'pg1', name: 'Page 1', width: 1200, height: 1800, panels: [] }], currentPageIndex: 0, zoom: 0.4, lastModified: Date.now() }); setShowProjectWindow(false); }} className="w-full bg-indigo-600 py-3 rounded-2xl text-[10px] font-black uppercase text-white shadow-xl hover:bg-indigo-500 transition-all">New Project</button>
                     <button onClick={syncToPyCharm} className="w-full bg-white/5 text-gray-500 p-3 rounded-2xl text-[9px] font-black uppercase hover:bg-white/10 transition-all flex items-center justify-center gap-2"><HardDriveDownload size={14}/> Sync to Disk</button>
                  </div>
               </div>
               <div className="flex-1 bg-black/60 rounded-3xl p-6 border border-white/5">
                  <div className="text-[11px] font-black uppercase text-indigo-400 tracking-widest border-b border-white/10 pb-4 mb-4">Project File Explorer</div>
-                 <div className="grid grid-cols-2 gap-4">
-                    <div className="aspect-[2/3] bg-white rounded-2xl flex items-center justify-center shadow-2xl scale-95 border-4 border-indigo-600 group cursor-pointer overflow-hidden">
-                       <span className="text-black font-black text-2xl comic-font uppercase">PAGE 01</span>
-                       <div className="absolute inset-0 bg-indigo-600/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-                    </div>
-                    <div className="aspect-[2/3] border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center hover:bg-white/5 cursor-pointer group transition-all">
+                 <div className="grid grid-cols-2 gap-4 overflow-y-auto custom-scrollbar max-h-[300px] pr-2">
+                    {project.pages.map((pg, i) => (
+                      <div key={pg.id} className="aspect-[2/3] bg-white rounded-2xl flex flex-col items-center justify-center shadow-2xl scale-95 border-2 border-indigo-600/30 group cursor-pointer overflow-hidden relative">
+                         <span className="text-black font-black text-xs comic-font uppercase text-center px-2">{pg.name}</span>
+                         <div className="absolute inset-0 bg-indigo-600/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <button onClick={() => setProject(p => ({...p, currentPageIndex: i}))} className="bg-indigo-600 text-white p-2 rounded-full shadow-xl"><Eye size={18} /></button>
+                         </div>
+                      </div>
+                    ))}
+                    <div onClick={() => addNewPage()} className="aspect-[2/3] border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center hover:bg-white/5 cursor-pointer group transition-all">
                        <Plus size={32} className="text-gray-800 group-hover:text-indigo-400" />
                        <span className="text-[9px] font-black uppercase text-gray-800 mt-2 tracking-widest">Append Frame</span>
                     </div>
@@ -500,7 +693,7 @@ const App: React.FC = () => {
                          </div>
                          <button onClick={() => {
                             if (!targetPanelId) return setStatusMessage("Select target frame.");
-                            const p = project.panels.find(pan => pan.id === targetPanelId);
+                            const p = currentPage.panels.find(pan => pan.id === targetPanelId);
                             if (!p) return;
                             const l: Layer = { id: `l_ast_${Date.now()}`, type: LayerType.CHARACTER, name: 'Asset', content: aiPreview!, x: 50, y: 50, scale: 0.8, rotation: 0, opacity: 1, zIndex: p.layers.length + 1 };
                             updatePanel(targetPanelId, { layers: [...p.layers, l] });
@@ -511,7 +704,7 @@ const App: React.FC = () => {
                  </div>
                  <select className="w-full bg-indigo-600/10 border border-indigo-500/30 p-3 rounded-2xl text-[10px] font-black uppercase text-indigo-400" value={targetPanelId || ''} onChange={e => setTargetPanelId(e.target.value)}>
                     <option value="">Select Target Frame...</option>
-                    {project.panels.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+                    {currentPage.panels.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
                  </select>
               </div>
            </div>
@@ -544,7 +737,7 @@ const App: React.FC = () => {
            </div>
         </div>
         <div className="text-gray-600 font-black uppercase tracking-[0.2em] flex items-center gap-2">
-           <LayoutDashboard size={14}/> {project.panels.length} PANELS | {isOnline ? 'CLOUD ACTIVE' : 'LOCAL MODE'}
+           <LayoutDashboard size={14}/> {currentPage.panels.length} PANELS | {project.pages.length} PAGES | {isOnline ? 'CLOUD ACTIVE' : 'LOCAL MODE'}
         </div>
       </div>
     </div>
@@ -615,7 +808,7 @@ const PanelItem = memo(({ panel, isSelected, selectedLayerId, onUpdateLayer, onP
     }
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('mouseup', handlePointerUp);
+      window.removeEventListener('pointerup', handlePointerUp);
     };
   }, [draggingTailId, draggingLayerId, handlePointerMove, handlePointerUp]);
 

@@ -53,13 +53,20 @@ export interface Panel {
   layers: Layer[];
 }
 
+export interface Page {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  panels: Panel[];
+}
+
 export interface ComicProject {
   id: string;
   title: string;
   author: string;
-  panels: Panel[];
-  width: number;
-  height: number;
+  pages: Page[];
+  currentPageIndex: number;
   zoom: number;
   lastModified: number;
 }

@@ -33,7 +33,8 @@ export const SpeechBubble = ({ type, color = 'white', border = 'black', tailX = 
     case 'whisper':
       return (
         <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-lg overflow-visible">
-          <path d={`M5,40 Q5,10 50,10 Q95,10 95,40 Q95,70 50,70 Q45,70 ${tailX},${tailY} Q35,70 5,70 Q5,40 5,40`} fill={color} stroke={border} strokeWidth="3" strokeDasharray="5,5" />
+          {/* A more subdued, flatter shape for whispers */}
+          <path d={`M10,45 Q10,25 50,25 Q90,25 90,45 Q90,65 50,65 Q45,65 ${tailX},${tailY} Q35,65 10,65 Q10,45 10,45`} fill={color} stroke={border} strokeWidth="2" strokeDasharray="4,4" />
         </svg>
       );
     default:
