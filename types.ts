@@ -5,7 +5,8 @@ export enum LayerType {
   ASSET = 'asset',
   TEXT_BUBBLE = 'text_bubble',
   FREE_TEXT = 'free_text',
-  NARRATION = 'narration'
+  NARRATION = 'narration',
+  GROUP = 'group'
 }
 
 export interface Layer {
@@ -34,6 +35,8 @@ export interface Layer {
   color?: string;
   tailX?: number;
   tailY?: number;
+  children?: Layer[]; // For GROUP type
+  isExpanded?: boolean; // For UI state in explorer
 }
 
 export interface Panel {
@@ -58,6 +61,7 @@ export interface Page {
   name: string;
   width: number;
   height: number;
+  backgroundColor: string; // Supports CSS colors and gradients
   panels: Panel[];
 }
 
