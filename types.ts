@@ -53,6 +53,8 @@ export interface Panel {
   borderOpacity: number;
   shadowIntensity: number;
   backgroundColor: string;
+  borderRadius: number; 
+  panelStyle: 'standard' | 'action' | 'borderless'; 
   layers: Layer[];
 }
 
@@ -61,7 +63,8 @@ export interface Page {
   name: string;
   width: number;
   height: number;
-  backgroundColor: string; // Supports CSS colors and gradients
+  category: string; // Tracks 'Comic', 'Game', or 'Digital'
+  backgroundColor: string; 
   panels: Panel[];
 }
 
